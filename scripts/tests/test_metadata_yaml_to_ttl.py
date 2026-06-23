@@ -166,7 +166,7 @@ def test_new_dataset_requires_explicit_metadata_timestamp_when_missing_in_yaml(
         module.convert_dataset(dataset, module.Config())
 
 
-def test_new_dataset_can_take_metadata_timestamps_from_yaml(tmp_path: Path):
+def test_metadata_timestamp_fields_are_rejected_by_strict_yaml_schema(tmp_path: Path):
     module = load_module()
     dataset = tmp_path / "models" / "new-model"
     write_metadata_yaml(dataset)
@@ -174,12 +174,12 @@ def test_new_dataset_can_take_metadata_timestamps_from_yaml(tmp_path: Path):
         stream.write("metadata_issued: 2026-02-01T00:00:00Z\n")
         stream.write("metadata_modified: 2026-02-02T00:00:00Z\n")
 
-    module.convert_dataset(dataset, module.Config())
+    with pytest.raises(
+        module.MetadataConversionError, match="Unsupported metadata.yaml field"
+    ):
+        module.convert_dataset(dataset, module.Config())
 
-    generated = (dataset / "metadata.ttl").read_text(encoding="utf-8")
-    assert "2026-02-01T00:00:00Z" in generated
-    assert "2026-02-02T00:00:00Z" in generated
-    assert_parseable_turtle(dataset / "metadata.ttl")
+    assert not (dataset / "metadata.ttl").exists()
 
 
 def test_missing_license_fails_by_default(tmp_path: Path):
@@ -392,14 +392,12 @@ def test_json_check_mode_outputs_clean_json_without_diff(
     assert "---" not in captured.out
 
 
-def test_no_preserve_existing_uses_explicit_yaml_iri_and_drops_existing_links(
+def test_no_preserve_existing_uses_deterministic_iri_and_drops_existing_links(
     tmp_path: Path,
 ):
     module = load_module()
     dataset = tmp_path / "models" / "explicit-iri-model"
     write_metadata_yaml(dataset)
-    with (dataset / "metadata.yaml").open("a", encoding="utf-8") as stream:
-        stream.write("iri: explicit-model\n")
     write_existing_metadata_ttl(dataset)
 
     module.convert_dataset(
@@ -411,9 +409,10 @@ def test_no_preserve_existing_uses_explicit_yaml_iri_and_drops_existing_links(
     )
 
     generated = (dataset / "metadata.ttl").read_text(encoding="utf-8")
-    assert "https://w3id.org/ontouml-models/model/explicit-model/" in generated
     assert "d88fe48c-d574-43b4-85d6-a6e1aeaa6726" not in generated
     assert "https://w3id.org/ontouml-models/distribution/one/" not in generated
+    assert "https://w3id.org/ontouml-models/model/" in generated
+    assert "explicit-iri-model" not in generated.split(" a dcat:Dataset", 1)[0]
     assert_parseable_turtle(dataset / "metadata.ttl")
 
 
@@ -450,9 +449,7 @@ def test_license_alias_https_lcc_theme_and_controlled_values(tmp_path: Path):
     assert_parseable_turtle(dataset / "metadata.ttl")
 
 
-def test_language_maps_ignore_unsupported_contact_points_and_distribution_deduplication(
-    tmp_path: Path,
-):
+def test_language_maps_are_supported_for_literal_fields(tmp_path: Path):
     module = load_module()
     dataset = tmp_path / "models" / "rich-yaml-model"
     write_metadata_yaml(dataset)
@@ -462,14 +459,6 @@ def test_language_maps_ignore_unsupported_contact_points_and_distribution_dedupl
         "title: Reference Ontology of Trust",
         "title:\n  en: Reference Ontology of Trust\n  pt: Ontologia de Confiança",
     )
-    yaml_text += """
-contactPoints:
- - name: Catalog Maintainer
-   email: maintainer@example.org
-distribution:
- - https://w3id.org/ontouml-models/distribution/one/
- - id: extra-local-distribution
-"""
     (dataset / "metadata.yaml").write_text(yaml_text, encoding="utf-8")
 
     module.convert_dataset(dataset, module.Config())
@@ -477,22 +466,77 @@ distribution:
     generated = (dataset / "metadata.ttl").read_text(encoding="utf-8")
     assert 'dct:title "Reference Ontology of Trust"@en' in generated
     assert '"Ontologia de Confiança"@pt' in generated
-    assert "vcard:" not in generated
-    assert "dcat:contactPoint" not in generated
-    assert "maintainer@example.org" not in generated
-    assert generated.count("https://w3id.org/ontouml-models/distribution/one/") == 1
-    assert "distribution/extra-local-distribution" in generated
     assert_parseable_turtle(dataset / "metadata.ttl")
 
 
-def test_yaml_metadata_timestamp_must_be_datetime_for_new_dataset(tmp_path: Path):
+def test_unsupported_contact_points_and_yaml_distribution_are_rejected(tmp_path: Path):
+    module = load_module()
+    dataset = tmp_path / "models" / "unsupported-fields"
+    write_metadata_yaml(dataset)
+    with (dataset / "metadata.yaml").open("a", encoding="utf-8") as stream:
+        stream.write("contactPoints:\n")
+        stream.write(" - name: Catalog Maintainer\n")
+        stream.write("   email: maintainer@example.org\n")
+        stream.write("distribution:\n")
+        stream.write(" - https://w3id.org/ontouml-models/distribution/one/\n")
+
+    with pytest.raises(
+        module.MetadataConversionError, match="Unsupported metadata.yaml field"
+    ):
+        module.convert_dataset(
+            dataset,
+            module.Config(metadata_timestamp="2026-01-31T12:00:00Z"),
+        )
+
+    assert not (dataset / "metadata.ttl").exists()
+
+
+def test_distribution_links_are_discovered_from_distribution_metadata_files(
+    tmp_path: Path,
+):
+    module = load_module()
+    dataset = tmp_path / "models" / "with-distribution-files"
+    write_metadata_yaml(dataset)
+    (dataset / "metadata-json.ttl").write_text(
+        """
+@prefix dcat: <http://www.w3.org/ns/dcat#> .
+
+<https://w3id.org/ontouml-models/distribution/json/> a dcat:Distribution .
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (dataset / "metadata-png-o-diagram.ttl").write_text(
+        """
+@prefix dcat: <http://www.w3.org/ns/dcat#> .
+
+<https://w3id.org/ontouml-models/distribution/png/> a dcat:Distribution .
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    module.convert_dataset(
+        dataset,
+        module.Config(metadata_timestamp="2026-01-31T12:00:00Z"),
+    )
+
+    generated = (dataset / "metadata.ttl").read_text(encoding="utf-8")
+    assert "https://w3id.org/ontouml-models/distribution/json/" in generated
+    assert "https://w3id.org/ontouml-models/distribution/png/" in generated
+    assert_parseable_turtle(dataset / "metadata.ttl")
+
+
+def test_metadata_timestamp_field_is_rejected_even_when_lexically_valid(tmp_path: Path):
     module = load_module()
     dataset = tmp_path / "models" / "bad-fdp-timestamp"
     write_metadata_yaml(dataset)
     with (dataset / "metadata.yaml").open("a", encoding="utf-8") as stream:
-        stream.write("metadata_issued: 2026\n")
+        stream.write("metadata_issued: 2026-02-01T00:00:00Z\n")
 
-    with pytest.raises(module.MetadataConversionError, match="metadata_issued must"):
+    with pytest.raises(
+        module.MetadataConversionError, match="Unsupported metadata.yaml field"
+    ):
         module.convert_dataset(dataset, module.Config())
 
 
@@ -758,13 +802,14 @@ def test_license_mapping_form_is_rejected_to_match_yaml_validator(tmp_path: Path
     with (dataset / "metadata.yaml").open("a", encoding="utf-8") as stream:
         stream.write("license:\n")
         stream.write("  id: CC-BY-4.0\n")
-        stream.write("metadata_issued: 2026-02-01T00:00:00Z\n")
-        stream.write("metadata_modified: 2026-02-02T00:00:00Z\n")
 
     with pytest.raises(
         module.MetadataConversionError, match="Field 'license' must be a single scalar"
     ):
-        module.convert_dataset(dataset, module.Config())
+        module.convert_dataset(
+            dataset,
+            module.Config(metadata_timestamp="2026-02-01T00:00:00Z"),
+        )
 
     assert not (dataset / "metadata.ttl").exists()
 
@@ -780,7 +825,9 @@ def test_fdp_timestamp_mapping_form_is_rejected_to_match_yaml_validator(tmp_path
         stream.write("  value: 2026-02-01T00:00:00Z\n")
         stream.write("metadata_modified: 2026-02-02T00:00:00Z\n")
 
-    with pytest.raises(module.MetadataConversionError, match="metadata_issued"):
+    with pytest.raises(
+        module.MetadataConversionError, match="Unsupported metadata.yaml field"
+    ):
         module.convert_dataset(dataset, module.Config())
 
     assert not (dataset / "metadata.ttl").exists()
@@ -843,4 +890,61 @@ def test_existing_metadata_without_fdp_timestamp_requires_explicit_timestamp(
     )
     generated = (dataset / "metadata.ttl").read_text(encoding="utf-8")
     assert "2026-01-31T12:00:00Z" in generated
+    assert_parseable_turtle(dataset / "metadata.ttl")
+
+
+def test_literal_mapping_uses_validator_compatible_keys_only(tmp_path: Path):
+    module = load_module()
+    dataset = tmp_path / "models" / "invalid-literal-map"
+    write_metadata_yaml(dataset)
+    yaml_text = (dataset / "metadata.yaml").read_text(encoding="utf-8")
+    yaml_text = yaml_text.replace(
+        "title: Reference Ontology of Trust",
+        "title:\n  Value: Reference Ontology of Trust",
+    )
+    (dataset / "metadata.yaml").write_text(yaml_text, encoding="utf-8")
+
+    with pytest.raises(module.MetadataConversionError, match="language tag"):
+        module.convert_dataset(
+            dataset,
+            module.Config(metadata_timestamp="2026-01-31T12:00:00Z"),
+        )
+
+
+def test_controlled_value_mappings_are_rejected_like_validator(tmp_path: Path):
+    module = load_module()
+    dataset = tmp_path / "models" / "invalid-controlled-value"
+    write_metadata_yaml(dataset)
+    yaml_text = (dataset / "metadata.yaml").read_text(encoding="utf-8")
+    yaml_text = yaml_text.replace(
+        " - conceptual clarification",
+        " - value: conceptual clarification",
+    )
+    (dataset / "metadata.yaml").write_text(yaml_text, encoding="utf-8")
+
+    with pytest.raises(
+        module.MetadataConversionError, match="controlled-value strings"
+    ):
+        module.convert_dataset(
+            dataset,
+            module.Config(metadata_timestamp="2026-01-31T12:00:00Z"),
+        )
+
+
+def test_comma_separated_language_scalar_matches_validator_behavior(tmp_path: Path):
+    module = load_module()
+    dataset = tmp_path / "models" / "multi-language"
+    write_metadata_yaml(dataset)
+    yaml_text = (dataset / "metadata.yaml").read_text(encoding="utf-8")
+    yaml_text = yaml_text.replace("language: en", "language: en, pt-BR")
+    (dataset / "metadata.yaml").write_text(yaml_text, encoding="utf-8")
+
+    module.convert_dataset(
+        dataset,
+        module.Config(metadata_timestamp="2026-01-31T12:00:00Z"),
+    )
+
+    generated = (dataset / "metadata.ttl").read_text(encoding="utf-8")
+    assert 'dct:language "en",\n                 "pt-BR"' in generated
+    assert 'dcat:keyword "trust"@en' in generated
     assert_parseable_turtle(dataset / "metadata.ttl")

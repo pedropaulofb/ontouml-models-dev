@@ -20,7 +20,19 @@ The converter is designed for repository maintenance and later CI/workflow integ
 
 ## Scope
 
-The converter assumes that `metadata.yaml` has already been validated and fixed by `validate_metadata_yaml.py`. It does not duplicate the full validator/linter responsibilities.
+The converter assumes that `metadata.yaml` has already been validated and fixed by `validate_metadata_yaml.py`. It does not duplicate the full validator/linter responsibilities, but it does enforce the same strict top-level field set used by the validator/fixer.
+
+The only supported top-level `metadata.yaml` fields are:
+
+```text
+title, acronym, issued, modified, contributor, keyword, theme,
+editorialNote, ontologyType, language, designedForTask, context,
+source, representationStyle, landingPage, license
+```
+
+RDF predicate aliases, converter-only fields, and extension fields are intentionally rejected. For example, `dct:title`, `metadata_issued`, `storage_url`, `distribution`, `contactPoints`, and `iri` are not valid `metadata.yaml` fields for this converter.
+
+Nested literal and controlled-value syntax is also kept aligned with the validator/fixer. For example, literal mappings must use the exact `value`, `lang`, `language`, and `datatype` keys supported by the validator, and controlled-value fields must contain strings, not mappings.
 
 It still fails clearly when data needed for conversion is missing or malformed, for example:
 
@@ -67,7 +79,7 @@ Generate `metadata.ttl` for all datasets under `models/`:
 python scripts/metadata_yaml_to_ttl.py --all --models-dir models
 ```
 
-If some existing or new datasets do not have `fdpo:metadataIssued` in `metadata.ttl` and do not define `metadata_issued` in `metadata.yaml`, provide an explicit deterministic timestamp for the generation run:
+If some existing or new datasets do not have `fdpo:metadataIssued` in `metadata.ttl`, provide an explicit deterministic timestamp for the generation run:
 
 ```bash
 python scripts/metadata_yaml_to_ttl.py --all --models-dir models --metadata-timestamp 2026-01-31T12:00:00Z
@@ -128,6 +140,8 @@ When `metadata.ttl` already exists, the converter reads it to preserve values th
 - existing `fdpo:metadataIssued` and `fdpo:metadataModified` timestamps;
 - existing `dcat:distribution` links.
 
+The converter also discovers distribution IRIs from distribution-specific metadata files already present in the dataset folder, such as `metadata-vpp.ttl`, `metadata-json.ttl`, `metadata-turtle.ttl`, and `metadata-png-*.ttl`.
+
 The remaining model-level descriptive metadata is regenerated from `metadata.yaml`.
 
 This behavior allows safe regeneration of existing datasets without replacing stable catalog identifiers or distribution links.
@@ -139,15 +153,15 @@ For new datasets that do not yet have `metadata.ttl`, the converter uses:
 - a deterministic UUIDv5 model IRI derived from the dataset folder name;
 - the default catalog IRI;
 - a default GitHub storage URL derived from `--repository`, `--branch`, `--models-dir`, and the dataset folder name;
-- `fdpo:metadataIssued` / `fdpo:metadataModified` from `metadata.yaml` when present, provided they are scalar valid `xsd:dateTime` lexical values. Mapping forms are intentionally not supported because they are not accepted by the metadata.yaml validator/fixer.
+- `dcat:distribution` links discovered from distribution-specific metadata files generated earlier in the workflow.
 
-If a new dataset does not define `metadata_issued` / `metadata_modified` in `metadata.yaml`, pass an explicit timestamp:
+New datasets must be generated with an explicit metadata timestamp unless one is preserved from an existing `metadata.ttl`:
 
 ```bash
 python scripts/metadata_yaml_to_ttl.py models/new-dataset --metadata-timestamp 2026-01-31T12:00:00Z
 ```
 
-Use `--metadata-timestamp now` only when non-deterministic current timestamps are intentionally acceptable. Existing datasets keep their current `fdpo:metadataIssued` and `fdpo:metadataModified` values by default. Existing datasets that currently lack FDP metadata timestamps require either scalar YAML timestamps or `--metadata-timestamp`; this avoids silently inventing catalog metadata timestamps.
+Use `--metadata-timestamp now` only when non-deterministic current timestamps are intentionally acceptable. Existing datasets keep their current `fdpo:metadataIssued` and `fdpo:metadataModified` values by default. Existing datasets that currently lack FDP metadata timestamps require `--metadata-timestamp`; this avoids silently inventing catalog metadata timestamps.
 
 ## Exit codes
 
@@ -163,6 +177,7 @@ A typical CI sequence for future dataset submissions is:
 
 ```bash
 python scripts/validate_metadata_yaml.py --all --fix --allow-missing-license
+# Run distribution-specific metadata generators here, e.g. JSON/Turtle/VPP/PNG metadata.
 python scripts/metadata_yaml_to_ttl.py --all --check --allow-missing-license --metadata-timestamp 2026-01-31T12:00:00Z
 ```
 
@@ -173,4 +188,4 @@ For stricter future-only validation where license must be present, omit `--allow
 - `metadata.yaml` is the only editable input source for regenerated model-level metadata.
 - The converter does not read `metadata-turtle.ttl`.
 - The converter writes only `metadata.ttl`.
-- Existing distribution-specific metadata files, such as `metadata-json.ttl`, `metadata-turtle.ttl`, and `metadata-png-*.ttl`, are not modified.
+- Existing distribution-specific metadata files, such as `metadata-json.ttl`, `metadata-turtle.ttl`, and `metadata-png-*.ttl`, are read to discover `dcat:Distribution` IRIs but are not modified.

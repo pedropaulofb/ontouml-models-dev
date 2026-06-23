@@ -86,6 +86,7 @@ DATE_TIME_RE = re.compile(
     r"(?:\.\d+)?"
     r"(?:Z|[+-]\d{2}:\d{2})?$"
 )
+LANGUAGE_RE = re.compile(r"^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$")
 MODEL_IRI_RE = re.compile(
     r"<(https://w3id\.org/ontouml-models/model/[^>]+/?)>\s+a\s+[^.;]*\bdcat:Dataset\b",
     re.S,
@@ -109,56 +110,31 @@ IS_PART_OF_RE = re.compile(r"\bdct:isPartOf\s+<([^>]+)>", re.S)
 LICENSE_RE = re.compile(r"\bdct:license\s+<([^>]+)>", re.S)
 
 FIELD_ALIASES: dict[str, tuple[str, ...]] = {
-    "iri": ("iri", "uri", "model_iri", "modelIri", "identifier", "id"),
-    "title": ("title", "dct:title"),
-    "alternative": (
-        "alternative",
-        "alternative_title",
-        "alternativeTitle",
-        "dct:alternative",
-    ),
-    "description": ("description", "dct:description"),
-    "issued": ("issued", "dct:issued"),
-    "modified": ("modified", "dct:modified"),
-    "license": ("license", "dct:license"),
-    "access_rights": ("access_rights", "accessRights", "dct:accessRights"),
-    "editorial_note": ("editorialNote", "editorial_note", "skos:editorialNote"),
-    "creator": ("creator", "creators", "dct:creator"),
-    "contributor": ("contributor", "contributors", "dct:contributor"),
-    "publisher": ("publisher", "dct:publisher"),
-    "metadata_issued": ("metadata_issued", "metadataIssued", "fdpo:metadataIssued"),
-    "metadata_modified": (
-        "metadata_modified",
-        "metadataModified",
-        "fdpo:metadataModified",
-    ),
-    "landing_page": ("landingPage", "landing_page", "dcat:landingPage"),
-    "bibliographic_citation": (
-        "bibliographic_citation",
-        "bibliographicCitation",
-        "dct:bibliographicCitation",
-    ),
-    "storage_url": ("storage_url", "storageUrl", "ocmv:storageUrl"),
-    "keyword": ("keyword", "keywords", "dcat:keyword"),
-    "acronym": ("acronym", "mod:acronym"),
-    "source": ("source", "sources", "dct:source"),
-    "language": ("language", "languages", "dct:language"),
-    "theme": ("theme", "dcat:theme"),
-    "designed_for_task": (
-        "designedForTask",
-        "designed_for_task",
-        "mod:designedForTask",
-    ),
-    "context": ("context", "ocmv:context"),
-    "representation_style": (
-        "representationStyle",
-        "representation_style",
-        "ocmv:representationStyle",
-    ),
-    "ontology_type": ("ontologyType", "ontology_type", "ocmv:ontologyType"),
-    "is_part_of": ("is_part_of", "isPartOf", "dct:isPartOf"),
-    "distribution": ("distribution", "distributions", "dcat:distribution"),
+    # Keep this list aligned with scripts/validate_metadata_yaml.py.
+    # The converter intentionally accepts only repository-facing model-level
+    # metadata.yaml fields, not RDF predicate aliases or converter-only fields.
+    "title": ("title",),
+    "acronym": ("acronym",),
+    "issued": ("issued",),
+    "modified": ("modified",),
+    "contributor": ("contributor",),
+    "keyword": ("keyword",),
+    "theme": ("theme",),
+    "editorial_note": ("editorialNote",),
+    "ontology_type": ("ontologyType",),
+    "language": ("language",),
+    "designed_for_task": ("designedForTask",),
+    "context": ("context",),
+    "source": ("source",),
+    "representation_style": ("representationStyle",),
+    "landing_page": ("landingPage",),
+    "license": ("license",),
 }
+
+KNOWN_TOP_LEVEL_FIELDS: set[str] = {
+    alias for aliases in FIELD_ALIASES.values() for alias in aliases
+}
+
 
 DESIGNED_FOR_TASKS: dict[str, URIRef] = {
     "conceptualclarification": OCMV.ConceptualClarification,
@@ -238,6 +214,29 @@ MetadataYamlLoader.yaml_implicit_resolvers = {
     ]
     for key, resolvers in yaml.SafeLoader.yaml_implicit_resolvers.items()
 }
+
+
+def _construct_mapping_no_duplicates(
+    loader: MetadataYamlLoader, node: yaml.MappingNode, deep: bool = False
+) -> dict[Any, Any]:
+    mapping: dict[Any, Any] = {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        if key in mapping:
+            raise yaml.constructor.ConstructorError(
+                "while constructing a mapping",
+                node.start_mark,
+                f"found duplicate key {key!r}",
+                key_node.start_mark,
+            )
+        mapping[key] = loader.construct_object(value_node, deep=deep)
+    return mapping
+
+
+MetadataYamlLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
+    _construct_mapping_no_duplicates,
+)
 
 
 class MetadataConversionError(RuntimeError):
@@ -362,12 +361,11 @@ def mapping_get_normalized(mapping: Mapping[str, Any], key: str) -> Any:
 
 
 def canonical_value(data: Mapping[str, Any], canonical: str) -> Any:
-    """Return a value using supported field aliases without recursively validating YAML."""
+    """Return a value using the strict validator-compatible field names."""
 
     for key in FIELD_ALIASES[canonical]:
-        value = mapping_get_normalized(data, key)
-        if value is not None:
-            return value
+        if key in data:
+            return data[key]
     return None
 
 
@@ -532,65 +530,106 @@ def current_datetime_literal() -> Literal:
     return Literal(value, datatype=XSD.dateTime, normalize=False)
 
 
+def _literal_scalar_text(value: Any, field_name: str) -> str:
+    if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+        raise MetadataConversionError(
+            f"Field '{field_name}' literal values must be strings or scalar numbers."
+        )
+    return str(value)
+
+
+def _validate_language_tag(value: Any, field_name: str) -> str:
+    if not isinstance(value, str) or not LANGUAGE_RE.fullmatch(value.strip()):
+        raise MetadataConversionError(
+            f"Field '{field_name}' must use a language tag such as 'en' or 'pt-BR'."
+        )
+    return value.strip()
+
+
 def literal_values(
     value: Any, field_name: str, *, default_lang: Optional[str] = None
 ) -> Iterable[Literal]:
-    """Yield RDF literals from scalar, list, value/lang, or language-map YAML forms."""
+    """Yield RDF literals from validator-compatible YAML literal forms."""
+
+    if default_lang:
+        default_lang = _validate_language_tag(default_lang, f"{field_name}.language")
 
     for item in as_list(value):
         if item is None:
             continue
         if isinstance(item, Mapping):
-            item_value = mapping_get_normalized(item, "value")
-            if item_value is not None:
-                lang = mapping_get_normalized(item, "lang") or mapping_get_normalized(
-                    item, "language"
-                )
-                datatype_value = mapping_get_normalized(item, "datatype")
+            if "value" in item:
+                item_value = item.get("value")
+                literal_text = _literal_scalar_text(item_value, f"{field_name}.value")
+                lang = item.get("lang") or item.get("language")
+                datatype_value = item.get("datatype")
                 if lang and datatype_value:
                     raise MetadataConversionError(
                         f"Field '{field_name}' cannot define both language and datatype for one literal."
                     )
                 if lang:
-                    yield Literal(str(item_value), lang=str(lang))
+                    yield Literal(
+                        literal_text,
+                        lang=_validate_language_tag(lang, f"{field_name}.lang"),
+                    )
                 elif datatype_value:
                     yield Literal(
-                        str(item_value),
+                        literal_text,
                         datatype=make_uri(
                             str(datatype_value), field_name=f"{field_name}.datatype"
                         ),
                     )
                 elif default_lang:
-                    yield Literal(str(item_value), lang=default_lang)
+                    yield Literal(literal_text, lang=default_lang)
                 else:
-                    yield Literal(str(item_value))
+                    yield Literal(literal_text)
             else:
                 for lang, literal_value in item.items():
-                    if literal_value is not None:
-                        yield Literal(str(literal_value), lang=str(lang))
-        elif default_lang:
-            yield Literal(str(item), lang=default_lang)
+                    literal_text = _literal_scalar_text(
+                        literal_value, f"{field_name}.{lang}"
+                    )
+                    yield Literal(
+                        literal_text,
+                        lang=_validate_language_tag(lang, f"{field_name}.{lang}"),
+                    )
+            continue
+
+        literal_text = _literal_scalar_text(item, field_name)
+        if default_lang:
+            yield Literal(literal_text, lang=default_lang)
         else:
-            yield Literal(str(item))
+            yield Literal(literal_text)
+
+
+def language_values(value: Any) -> list[str]:
+    values: list[str] = []
+    for item in as_list(value):
+        if is_missing(item):
+            continue
+        if not isinstance(item, str):
+            raise MetadataConversionError(
+                "Field 'language' must contain language-tag strings."
+            )
+        parts = item.split(",") if "," in item else [item]
+        for part in parts:
+            if part.strip():
+                values.append(_validate_language_tag(part.strip(), "language"))
+    return values
 
 
 def first_language(data: Mapping[str, Any]) -> Optional[str]:
-    languages = as_list(canonical_value(data, "language"))
-    for language in languages:
-        text = first_text(language)
-        if text:
-            return text
-    return None
+    languages = language_values(canonical_value(data, "language"))
+    return languages[0] if languages else None
 
 
 def normalize_enum(value: Any, allowed: dict[str, URIRef], field_name: str) -> URIRef:
-    text = first_text(value)
-    if not text:
+    if not isinstance(value, str) or not value.strip():
         raise MetadataConversionError(
-            f"Field '{field_name}' contains an empty controlled value."
+            f"Field '{field_name}' must contain non-empty controlled-value strings."
         )
+    text = value.strip()
     if is_http_uri(text):
-        uri = URIRef(text.strip())
+        uri = URIRef(text)
         if uri in allowed.values():
             return uri
         raise MetadataConversionError(
@@ -606,17 +645,19 @@ def normalize_enum(value: Any, allowed: dict[str, URIRef], field_name: str) -> U
 
 
 def normalize_theme(value: Any) -> URIRef:
-    text = first_text(value)
-    if not text:
-        raise MetadataConversionError("Field 'theme' must have a value.")
+    if not isinstance(value, str) or not value.strip():
+        raise MetadataConversionError(
+            "Field 'theme' must contain one scalar Library of Congress Classification value."
+        )
+    text = value.strip()
     if is_http_uri(text):
-        match = LCC_URI_RE.fullmatch(text.strip())
+        match = LCC_URI_RE.fullmatch(text)
         if not match:
             raise MetadataConversionError(
                 f"Field 'theme' must use the Library of Congress Classification namespace; got {text!r}."
             )
         return URIRef(str(LCC) + match.group(1).upper())
-    label_match = re.fullmatch(r"Class\s+([A-Z])\s+-\s+.+", text.strip(), re.I)
+    label_match = re.fullmatch(r"Class\s+([A-Z])\s+-\s+.+", text, re.I)
     if label_match:
         code = label_match.group(1).upper()
         return URIRef(str(LCC) + code)
@@ -646,16 +687,8 @@ def deterministic_model_iri(dataset_folder: Path, model_iri_base: str) -> URIRef
 def yaml_model_iri(
     data: Mapping[str, Any], dataset_folder: Path, model_iri_base: str
 ) -> URIRef:
-    value = canonical_value(data, "iri")
-    text = first_text(value)
-    if text:
-        if is_http_uri(text):
-            return URIRef(text.strip().rstrip("/") + "/")
-        if ":" in text:
-            raise MetadataConversionError(
-                "Field 'iri' must be an HTTP(S) URI or a local slug."
-            )
-        return URIRef(f"{model_iri_base.rstrip('/')}/{text.strip().strip('/')}/")
+    # metadata.yaml no longer exposes a model IRI field. Existing metadata.ttl
+    # preserves stable UUID-based IRIs; new datasets receive deterministic UUIDv5 IRIs.
     return deterministic_model_iri(dataset_folder, model_iri_base)
 
 
@@ -753,17 +786,10 @@ def read_existing_metadata(ttl_path: Path) -> ExistingMetadata:
 
 
 def metadata_timestamp_literals(
-    data: Mapping[str, Any], existing: ExistingMetadata, config: Config, ttl_path: Path
+    existing: ExistingMetadata, config: Config, ttl_path: Path
 ) -> tuple[Literal, Literal]:
-    yaml_issued = canonical_value(data, "metadata_issued")
-    yaml_modified = canonical_value(data, "metadata_modified")
-
     if existing.metadata_issued is not None:
         metadata_issued = existing.metadata_issued
-    elif not is_missing(yaml_issued):
-        metadata_issued = configured_datetime_literal(
-            scalar_text(yaml_issued), "metadata_issued"
-        )
     elif config.metadata_timestamp == "now":
         metadata_issued = current_datetime_literal()
     elif config.metadata_timestamp:
@@ -774,16 +800,12 @@ def metadata_timestamp_literals(
         raise MetadataConversionError(
             f"No fdpo:metadataIssued value is available for {ttl_path}. "
             "Existing metadata.ttl files that lack FDP metadata timestamps and new metadata.ttl files "
-            "must be regenerated with metadata_issued in metadata.yaml or with --metadata-timestamp, "
-            "for example --metadata-timestamp 2026-01-31T12:00:00Z."
+            "must be regenerated with --metadata-timestamp, for example "
+            "--metadata-timestamp 2026-01-31T12:00:00Z."
         )
 
     if existing.metadata_modified is not None:
         metadata_modified = existing.metadata_modified
-    elif not is_missing(yaml_modified):
-        metadata_modified = configured_datetime_literal(
-            scalar_text(yaml_modified), "metadata_modified"
-        )
     elif config.metadata_timestamp == "now":
         metadata_modified = metadata_issued
     elif config.metadata_timestamp:
@@ -794,6 +816,24 @@ def metadata_timestamp_literals(
         metadata_modified = metadata_issued
 
     return metadata_issued, metadata_modified
+
+
+def validate_supported_yaml_fields(data: Mapping[str, Any]) -> None:
+    unexpected: list[str] = []
+    for key in data:
+        if not isinstance(key, str):
+            raise MetadataConversionError(
+                f"Top-level metadata.yaml key {key!r} must be a string."
+            )
+        if key not in KNOWN_TOP_LEVEL_FIELDS:
+            unexpected.append(key)
+    if unexpected:
+        quoted = ", ".join(repr(key) for key in sorted(unexpected))
+        raise MetadataConversionError(
+            "Unsupported metadata.yaml field(s): "
+            + quoted
+            + ". Run scripts/validate_metadata_yaml.py and keep only fields defined by the catalog metadata.yaml template."
+        )
 
 
 def validate_minimum_convertible_fields(
@@ -841,48 +881,47 @@ def literal_objects(
     return list(literal_values(value, field_name, default_lang=default_lang))
 
 
-def distribution_iri(model_iri: URIRef, item: Any, index: int) -> URIRef:
-    if isinstance(item, str):
-        return make_uri(item, field_name="distribution")
-    if not isinstance(item, Mapping):
-        raise MetadataConversionError(
-            "Each distribution value must be a URI string or a mapping."
-        )
-    explicit = (
-        mapping_get_normalized(item, "iri")
-        or mapping_get_normalized(item, "uri")
-        or mapping_get_normalized(item, "id")
+DISTRIBUTION_IRI_RE = re.compile(r"<([^>]+)>\s+a\s+[^.;]*\bdcat:Distribution\b", re.S)
+
+
+def read_distribution_iri_from_metadata_file(path: Path) -> Optional[URIRef]:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise MetadataSetupError(
+            f"Could not read distribution metadata file {path}: {exc}"
+        ) from exc
+    match = DISTRIBUTION_IRI_RE.search(text)
+    return URIRef(match.group(1)) if match else None
+
+
+def discover_distribution_iris(dataset_folder: Path) -> tuple[URIRef, ...]:
+    """Discover distribution IRIs from distribution-specific metadata files.
+
+    metadata.yaml no longer contains distribution links. For new datasets, this
+    lets metadata.ttl aggregate distribution metadata generated earlier in the
+    workflow, such as metadata-json.ttl, metadata-turtle.ttl, metadata-vpp.ttl,
+    and metadata-png-*.ttl.
+    """
+
+    candidates = sorted(
+        path
+        for path in dataset_folder.glob("metadata-*.ttl")
+        if path.name != OUTPUT_FILE_NAME
     )
-    if explicit:
-        text = str(explicit).strip()
-        if is_http_uri(text):
-            return URIRef(text)
-        if ":" in text:
-            raise MetadataConversionError(
-                "Distribution id must be an HTTP(S) URI or a local slug."
-            )
-        slug = text.strip("/")
-    else:
-        slug = str(
-            mapping_get_normalized(item, "name")
-            or mapping_get_normalized(item, "key")
-            or index
-        ).strip("/")
-    if not slug:
-        raise MetadataConversionError("Distribution id/name cannot be empty.")
-    return URIRef(f"{normalized_model_iri(model_iri)}/distribution/{slug}")
+    return unique_uri_refs(
+        str(uri)
+        for path in candidates
+        for uri in [read_distribution_iri_from_metadata_file(path)]
+        if uri is not None
+    )
 
 
 def combined_distribution_iris(
-    data: Mapping[str, Any], existing: ExistingMetadata, model_iri: URIRef
+    dataset_folder: Path, existing: ExistingMetadata
 ) -> tuple[URIRef, ...]:
     distributions = list(existing.distributions)
-    yaml_distributions = canonical_value(data, "distribution")
-    if yaml_distributions:
-        distributions.extend(
-            distribution_iri(model_iri, item, index)
-            for index, item in enumerate(as_list(yaml_distributions), start=1)
-        )
+    distributions.extend(discover_distribution_iris(dataset_folder))
     return unique_uri_refs(str(uri) for uri in distributions)
 
 
@@ -957,6 +996,7 @@ def build_turtle(
     existing: ExistingMetadata,
     config: Config,
 ) -> tuple[str, int, list[str]]:
+    validate_supported_yaml_fields(data)
     validate_minimum_convertible_fields(
         data, allow_missing_license=config.allow_missing_license
     )
@@ -976,13 +1016,9 @@ def build_turtle(
     catalog_iri = (
         existing.catalog_iri
         if config.preserve_existing and existing.catalog_iri
-        else make_uri(
-            str(canonical_value(data, "is_part_of") or config.catalog_iri),
-            field_name="is_part_of",
-        )
+        else make_uri(str(config.catalog_iri), field_name="catalog_iri")
     )
     metadata_issued, metadata_modified = metadata_timestamp_literals(
-        data,
         existing if config.preserve_existing else ExistingMetadata(),
         config,
         dataset_folder / OUTPUT_FILE_NAME,
@@ -990,8 +1026,7 @@ def build_turtle(
     storage_url = (
         existing.storage_url
         if config.preserve_existing and existing.storage_url
-        else first_text(canonical_value(data, "storage_url"))
-        or default_storage_url(dataset_folder, config)
+        else default_storage_url(dataset_folder, config)
     )
     if not storage_url or not is_http_uri(storage_url):
         raise MetadataConversionError(
@@ -1032,16 +1067,6 @@ def build_turtle(
     )
     append_predicate(
         statements,
-        DCT.alternative,
-        literal_objects(canonical_value(data, "alternative"), "alternative"),
-    )
-    append_predicate(
-        statements,
-        DCT.description,
-        literal_objects(canonical_value(data, "description"), "description"),
-    )
-    append_predicate(
-        statements,
         DCT.issued,
         [date_literal(canonical_value(data, "issued"), "issued")],
     )
@@ -1063,9 +1088,8 @@ def build_turtle(
         statements,
         DCT.language,
         [
-            Literal(str(item))
-            for item in as_list(canonical_value(data, "language"))
-            if not is_missing(item)
+            Literal(language)
+            for language in language_values(canonical_value(data, "language"))
         ],
     )
     landing_page = canonical_value(data, "landing_page")
@@ -1083,32 +1107,8 @@ def build_turtle(
         )
     append_predicate(
         statements,
-        DCT.accessRights,
-        [
-            make_uri(str(item), field_name="access_rights")
-            if is_http_uri(str(item))
-            else Literal(str(item))
-            for item in as_list(canonical_value(data, "access_rights"))
-            if not is_missing(item)
-        ],
-    )
-    append_predicate(
-        statements,
-        DCT.creator,
-        uri_objects(canonical_value(data, "creator"), "creator"),
-    )
-    append_predicate(
-        statements,
         DCT.contributor,
         uri_objects(canonical_value(data, "contributor"), "contributor"),
-    )
-    publisher = as_list(canonical_value(data, "publisher"))
-    if len(publisher) > 1:
-        raise MetadataConversionError("Field 'publisher' must have at most one URI.")
-    append_predicate(
-        statements,
-        DCT.publisher,
-        uri_objects(publisher[0], "publisher") if publisher else [],
     )
     append_predicate(
         statements,
@@ -1117,14 +1117,6 @@ def build_turtle(
             canonical_value(data, "keyword"),
             "keyword",
             default_lang=default_keyword_lang,
-        ),
-    )
-    append_predicate(
-        statements,
-        DCT.bibliographicCitation,
-        literal_objects(
-            canonical_value(data, "bibliographic_citation"),
-            "bibliographic_citation",
         ),
     )
     append_predicate(
@@ -1169,7 +1161,7 @@ def build_turtle(
     append_predicate(statements, FDPO.metadataModified, [metadata_modified])
 
     distributions = combined_distribution_iris(
-        data, existing if config.preserve_existing else ExistingMetadata(), subject
+        dataset_folder, existing if config.preserve_existing else ExistingMetadata()
     )
     turtle = render_turtle(subject, distribution_subject, statements, distributions)
 
@@ -1375,7 +1367,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--model-iri-base",
         default=DEFAULT_MODEL_IRI_BASE,
-        help=f"Base IRI used for deterministic IDs when no existing metadata.ttl or explicit iri is present. Default: {DEFAULT_MODEL_IRI_BASE}.",
+        help=f"Base IRI used for deterministic UUIDv5 model IRIs when no existing metadata.ttl is present. Default: {DEFAULT_MODEL_IRI_BASE}.",
     )
     parser.add_argument(
         "--catalog-iri",
@@ -1386,8 +1378,8 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         "--metadata-timestamp",
         help=(
             "xsd:dateTime value to use for fdpo:metadataIssued/fdpo:metadataModified when creating "
-            "a new metadata.ttl without YAML metadata_issued/metadata_modified. Use 'now' only when "
-            "non-deterministic current timestamps are intentionally desired."
+            "a new metadata.ttl or regenerating an existing one without FDP timestamps. Use 'now' only "
+            "when non-deterministic current timestamps are intentionally desired."
         ),
     )
     parser.add_argument(
