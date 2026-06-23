@@ -16,6 +16,7 @@ The converter is designed for repository maintenance and later CI/workflow integ
 - explicit exit codes;
 - `--check` mode for CI;
 - JSON summary output for logs;
+- per-dataset progress logs in text mode;
 - tests under `scripts/tests/`.
 
 ## Scope
@@ -33,6 +34,8 @@ source, representationStyle, landingPage, license
 RDF predicate aliases, converter-only fields, and extension fields are intentionally rejected. For example, `dct:title`, `metadata_issued`, `storage_url`, `distribution`, `contactPoints`, and `iri` are not valid `metadata.yaml` fields for this converter.
 
 Nested literal and controlled-value syntax is also kept aligned with the validator/fixer. For example, literal mappings must use the exact `value`, `lang`, `language`, and `datatype` keys supported by the validator, and controlled-value fields must contain strings, not mappings.
+
+`dcat:keyword` values are always generated with the English language tag (`@en`). This is independent of the model language declared with `dct:language`; for example, a model with `language: pt-BR` still generates `dcat:keyword "example"@en`.
 
 It still fails clearly when data needed for conversion is missing or malformed, for example:
 
@@ -104,6 +107,14 @@ python scripts/metadata_yaml_to_ttl.py --all --format json
 ```
 
 When `--format json` is used together with `--check`, diff output is suppressed so stdout remains valid JSON for CI parsers.
+
+In text mode, the script prints one progress line after each processed dataset and a final summary. To suppress non-error progress output, use:
+
+```bash
+python scripts/metadata_yaml_to_ttl.py --all --quiet
+```
+
+`--silent` is accepted as an alias for `--quiet`. Errors are still printed to `stderr`.
 
 Print generated Turtle without writing it:
 

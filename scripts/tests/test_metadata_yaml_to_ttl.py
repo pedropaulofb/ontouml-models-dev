@@ -337,6 +337,29 @@ def test_cli_all_processes_only_direct_dataset_folders(
     assert "generated:" in captured.out
 
 
+def test_quiet_suppresses_success_progress_and_summary(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+):
+    module = load_module()
+    dataset = tmp_path / "models" / "quiet-model"
+    write_metadata_yaml(dataset)
+
+    exit_code = module.main(
+        [
+            str(dataset),
+            "--metadata-timestamp",
+            "2026-01-31T12:00:00Z",
+            "--quiet",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert captured.out == ""
+    assert captured.err == ""
+    assert (dataset / "metadata.ttl").exists()
+
+
 def test_json_summary_reports_results(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ):
@@ -466,6 +489,34 @@ def test_language_maps_are_supported_for_literal_fields(tmp_path: Path):
     generated = (dataset / "metadata.ttl").read_text(encoding="utf-8")
     assert 'dct:title "Reference Ontology of Trust"@en' in generated
     assert '"Ontologia de Confiança"@pt' in generated
+    assert_parseable_turtle(dataset / "metadata.ttl")
+
+
+def test_keywords_are_always_emitted_in_english_independent_of_model_language(
+    tmp_path: Path,
+):
+    module = load_module()
+    dataset = tmp_path / "models" / "pt-keyword-model"
+    write_metadata_yaml(dataset)
+    yaml_text = (dataset / "metadata.yaml").read_text(encoding="utf-8")
+    yaml_text = yaml_text.replace("language: en", "language: pt-BR")
+    yaml_text = yaml_text.replace(
+        "keyword:\n - trust",
+        "keyword:\n - trust\n - {pt: confiança}",
+    )
+    (dataset / "metadata.yaml").write_text(yaml_text, encoding="utf-8")
+
+    module.convert_dataset(
+        dataset,
+        module.Config(metadata_timestamp="2026-01-31T12:00:00Z"),
+    )
+
+    generated = (dataset / "metadata.ttl").read_text(encoding="utf-8")
+    assert 'dct:language "pt-BR"' in generated
+    assert 'dcat:keyword "trust"@en' in generated
+    assert '"confiança"@en' in generated
+    assert '"trust"@pt-BR' not in generated
+    assert '"confiança"@pt' not in generated
     assert_parseable_turtle(dataset / "metadata.ttl")
 
 

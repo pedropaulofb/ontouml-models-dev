@@ -276,6 +276,7 @@ class Config:
     metadata_timestamp: Optional[str] = None
     preserve_existing: bool = True
     emit_diff: bool = True
+    quiet: bool = False
 
 
 @dataclass
@@ -881,6 +882,44 @@ def literal_objects(
     return list(literal_values(value, field_name, default_lang=default_lang))
 
 
+def keyword_literal_objects(value: Any) -> list[Literal]:
+    """Return dcat:keyword literals with the catalog-mandated English tag.
+
+    Keywords in metadata.yaml are maintained in English, regardless of the
+    model's dct:language value. Even if a validator-compatible literal mapping
+    includes a language tag, generated dcat:keyword values are emitted as @en.
+    """
+
+    if value is None:
+        return []
+
+    literals: list[Literal] = []
+    for item in as_list(value):
+        if item is None:
+            continue
+        if isinstance(item, Mapping):
+            if "value" in item:
+                if item.get("lang"):
+                    _validate_language_tag(item.get("lang"), "keyword.lang")
+                if item.get("language"):
+                    _validate_language_tag(item.get("language"), "keyword.language")
+                if item.get("datatype"):
+                    make_uri(str(item.get("datatype")), field_name="keyword.datatype")
+                text = _literal_scalar_text(item.get("value"), "keyword.value")
+                literals.append(Literal(text, lang="en"))
+            else:
+                for lang, literal_value in item.items():
+                    _validate_language_tag(lang, f"keyword.{lang}")
+                    text = _literal_scalar_text(literal_value, f"keyword.{lang}")
+                    literals.append(Literal(text, lang="en"))
+            continue
+
+        text = _literal_scalar_text(item, "keyword")
+        literals.append(Literal(text, lang="en"))
+
+    return literals
+
+
 DISTRIBUTION_IRI_RE = re.compile(r"<([^>]+)>\s+a\s+[^.;]*\bdcat:Distribution\b", re.S)
 
 
@@ -1053,8 +1092,6 @@ def build_turtle(
             yaml_license, allow_missing=config.allow_missing_license
         )
 
-    default_keyword_lang = first_language(data)
-
     statements: list[tuple[URIRef, list[Any]]] = []
     append_predicate(statements, DCT.isPartOf, [catalog_iri])
     append_predicate(
@@ -1113,11 +1150,7 @@ def build_turtle(
     append_predicate(
         statements,
         DCAT.keyword,
-        literal_objects(
-            canonical_value(data, "keyword"),
-            "keyword",
-            default_lang=default_keyword_lang,
-        ),
+        keyword_literal_objects(canonical_value(data, "keyword")),
     )
     append_predicate(
         statements, DCT.source, uri_objects(canonical_value(data, "source"), "source")
@@ -1295,21 +1328,50 @@ def convert_dataset(dataset_folder: Path, config: Config) -> ConversionResult:
     )
 
 
+def result_status(result: ConversionResult, *, check: bool) -> str:
+    if check:
+        return "needs update" if result.changed else "up to date"
+    if result.written:
+        return "generated"
+    if result.changed:
+        return "changed"
+    return "unchanged"
+
+
+def print_progress_result(result: ConversionResult, *, check: bool) -> None:
+    status = result_status(result, check=check)
+    severity = "WARNING" if result.warnings else "OK"
+    warning_suffix = f", {len(result.warnings)} warning(s)" if result.warnings else ""
+    print(
+        f"{severity} {status}: {result.dataset_path} -> {result.ttl_path} "
+        f"({result.triple_count} triples{warning_suffix})"
+    )
+    for warning in result.warnings:
+        print(f"WARNING {result.yaml_path}: {warning}", file=sys.stderr)
+
+
 def print_text_summary(
-    results: Sequence[ConversionResult], *, check: bool, dry_run: bool
+    results: Sequence[ConversionResult], *, error_count: int, check: bool, dry_run: bool
 ) -> None:
     if dry_run:
         return
-    for result in results:
-        for warning in result.warnings:
-            print(f"WARNING {result.yaml_path}: {warning}", file=sys.stderr)
-        if check:
-            status = "needs update" if result.changed else "up to date"
-        elif result.written:
-            status = "generated"
-        else:
-            status = "unchanged"
-        print(f"{status}: {result.ttl_path} ({result.triple_count} triples)")
+    total = len(results) + error_count
+    warnings = sum(len(result.warnings) for result in results)
+    changed = sum(1 for result in results if result.changed)
+    written = sum(1 for result in results if result.written)
+    needs_update = sum(1 for result in results if result.changed) if check else 0
+    if check:
+        print(
+            f"Summary: {total} processed, {len(results)} succeeded, "
+            f"{error_count} error(s), {warnings} warning(s), "
+            f"{needs_update} file(s) need update."
+        )
+    else:
+        print(
+            f"Summary: {total} processed, {len(results)} succeeded, "
+            f"{error_count} error(s), {warnings} warning(s), "
+            f"{written} written, {changed} changed."
+        )
 
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
@@ -1353,6 +1415,13 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         choices=("text", "json"),
         default="text",
         help="Summary output format. Default: text.",
+    )
+    parser.add_argument(
+        "-q",
+        "--quiet",
+        "--silent",
+        action="store_true",
+        help="Suppress per-dataset progress logs and the final text summary. Errors are still printed to stderr.",
     )
     parser.add_argument(
         "--repository",
@@ -1406,7 +1475,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         dry_run=args.dry_run,
         metadata_timestamp=args.metadata_timestamp,
         preserve_existing=not args.no_preserve_existing,
-        emit_diff=args.format == "text",
+        emit_diff=args.format == "text" and not args.quiet,
+        quiet=args.quiet,
     )
     try:
         datasets = resolve_datasets(
@@ -1414,9 +1484,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         )
         results: list[ConversionResult] = []
         errors: list[dict[str, str]] = []
+        progress_enabled = args.format == "text" and not args.quiet and not args.dry_run
         for dataset in datasets:
             try:
-                results.append(convert_dataset(dataset, config))
+                result = convert_dataset(dataset, config)
+                results.append(result)
+                if progress_enabled:
+                    print_progress_result(result, check=args.check)
             except MetadataConversionError as exc:
                 errors.append({"dataset": str(dataset), "error": str(exc)})
                 print(f"ERROR {dataset}: {exc}", file=sys.stderr)
@@ -1436,8 +1510,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     sort_keys=True,
                 )
             )
-        else:
-            print_text_summary(results, check=args.check, dry_run=args.dry_run)
+        elif not args.quiet:
+            print_text_summary(
+                results,
+                error_count=len(errors),
+                check=args.check,
+                dry_run=args.dry_run,
+            )
 
         if errors:
             return 1
