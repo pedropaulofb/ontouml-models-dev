@@ -111,7 +111,11 @@ Some older catalog datasets do not currently have license information. For those
 python scripts/metadata_yaml_to_ttl.py models/legacy-dataset --allow-missing-license
 ```
 
-When this option is used, `dct:license` is omitted from the generated `metadata.ttl`, and the command reports a warning.
+When this option is used, it only relaxes the missing-license error. It does **not** suppress available license metadata:
+
+- if `metadata.yaml` has `license`, the converter generates `dct:license`;
+- if `metadata.yaml` lacks `license` but existing `metadata.ttl` has `dct:license`, the existing license is preserved;
+- if neither file has license metadata, `dct:license` is omitted and the command reports a warning.
 
 ## Existing `metadata.ttl` preservation
 

@@ -194,6 +194,81 @@ def test_missing_license_fails_by_default(tmp_path: Path):
         )
 
 
+def test_allow_missing_license_does_not_suppress_yaml_license(tmp_path: Path):
+    module = load_module()
+    dataset = tmp_path / "models" / "has-license"
+    write_metadata_yaml(
+        dataset, license_line="license: https://creativecommons.org/licenses/by-sa/4.0/"
+    )
+
+    module.convert_dataset(
+        dataset,
+        module.Config(
+            allow_missing_license=True,
+            metadata_timestamp="2026-01-31T12:00:00Z",
+        ),
+    )
+
+    generated = (dataset / "metadata.ttl").read_text(encoding="utf-8")
+    assert "dct:license <https://creativecommons.org/licenses/by-sa/4.0/>" in generated
+    assert_parseable_turtle(dataset / "metadata.ttl")
+
+
+def test_allow_missing_license_preserves_existing_license_when_yaml_license_missing(
+    tmp_path: Path,
+):
+    module = load_module()
+    dataset = tmp_path / "models" / "legacy-license"
+    write_metadata_yaml(dataset, license_line=None)
+    write_existing_metadata_ttl(dataset)
+    ttl_path = dataset / "metadata.ttl"
+    ttl_path.write_text(
+        ttl_path.read_text(encoding="utf-8").replace(
+            '    dct:title "Old title";',
+            '    dct:title "Old title";\n    dct:license <https://creativecommons.org/licenses/by-sa/4.0/>;',
+        ),
+        encoding="utf-8",
+    )
+
+    result = module.convert_dataset(
+        dataset,
+        module.Config(
+            allow_missing_license=True,
+            metadata_timestamp="2026-01-31T12:00:00Z",
+        ),
+    )
+
+    generated = ttl_path.read_text(encoding="utf-8")
+    assert "dct:license <https://creativecommons.org/licenses/by-sa/4.0/>" in generated
+    assert any(
+        "preserved from existing metadata.ttl" in warning for warning in result.warnings
+    )
+    assert_parseable_turtle(ttl_path)
+
+
+def test_missing_yaml_license_still_fails_without_allow_even_when_existing_ttl_has_license(
+    tmp_path: Path,
+):
+    module = load_module()
+    dataset = tmp_path / "models" / "legacy-license"
+    write_metadata_yaml(dataset, license_line=None)
+    write_existing_metadata_ttl(dataset)
+    ttl_path = dataset / "metadata.ttl"
+    ttl_path.write_text(
+        ttl_path.read_text(encoding="utf-8").replace(
+            '    dct:title "Old title";',
+            '    dct:title "Old title";\n    dct:license <https://creativecommons.org/licenses/by-sa/4.0/>;',
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(module.MetadataConversionError, match="license"):
+        module.convert_dataset(
+            dataset,
+            module.Config(metadata_timestamp="2026-01-31T12:00:00Z"),
+        )
+
+
 def test_allow_missing_license_omits_license_triple_for_legacy_dataset(tmp_path: Path):
     module = load_module()
     dataset = tmp_path / "models" / "missing-license"

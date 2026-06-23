@@ -106,6 +106,7 @@ LCC_URI_RE = re.compile(
 )
 STORAGE_URI_RE = re.compile(r"\bocmv:storageUrl\s+<([^>]+)>", re.S)
 IS_PART_OF_RE = re.compile(r"\bdct:isPartOf\s+<([^>]+)>", re.S)
+LICENSE_RE = re.compile(r"\bdct:license\s+<([^>]+)>", re.S)
 
 FIELD_ALIASES: dict[str, tuple[str, ...]] = {
     "iri": ("iri", "uri", "model_iri", "modelIri", "identifier", "id"),
@@ -257,6 +258,7 @@ class ExistingMetadata:
     storage_url: Optional[str] = None
     metadata_issued: Optional[Literal] = None
     metadata_modified: Optional[Literal] = None
+    license_iri: Optional[URIRef] = None
     distributions: tuple[URIRef, ...] = ()
 
 
@@ -743,6 +745,9 @@ def read_existing_metadata(ttl_path: Path) -> ExistingMetadata:
         storage_url=storage_url,
         metadata_issued=prefixed_datetime_literal_from_text(text, "metadataIssued"),
         metadata_modified=prefixed_datetime_literal_from_text(text, "metadataModified"),
+        license_iri=URIRef(LICENSE_RE.search(text).group(1))
+        if LICENSE_RE.search(text)
+        else None,
         distributions=distributions,
     )
 
@@ -993,9 +998,26 @@ def build_turtle(
             f"Field 'storage_url' must resolve to an HTTP(S) URL; got {storage_url!r}."
         )
 
-    license_ref = license_uri(
-        canonical_value(data, "license"), allow_missing=config.allow_missing_license
-    )
+    yaml_license = canonical_value(data, "license")
+    if not is_missing(yaml_license):
+        # When a license is present in metadata.yaml, generate dct:license
+        # regardless of --allow-missing-license. The flag only relaxes missing
+        # license handling; it must not suppress available license metadata.
+        license_ref = license_uri(yaml_license, allow_missing=False)
+    elif (
+        config.allow_missing_license
+        and config.preserve_existing
+        and existing.license_iri
+    ):
+        license_ref = existing.license_iri
+        warnings.append(
+            "License metadata preserved from existing metadata.ttl because metadata.yaml has no license and --allow-missing-license was used."
+        )
+    else:
+        license_ref = license_uri(
+            yaml_license, allow_missing=config.allow_missing_license
+        )
+
     default_keyword_lang = first_language(data)
 
     statements: list[tuple[URIRef, list[Any]]] = []
@@ -1057,7 +1079,7 @@ def build_turtle(
         append_predicate(statements, DCT.license, [license_ref])
     else:
         warnings.append(
-            "License metadata omitted because --allow-missing-license was used."
+            "License metadata omitted because metadata.yaml has no license and --allow-missing-license was used."
         )
     append_predicate(
         statements,
