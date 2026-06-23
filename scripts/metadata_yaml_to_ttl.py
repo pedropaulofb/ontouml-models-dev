@@ -67,7 +67,6 @@ LCC = Namespace("http://id.loc.gov/authorities/classification/")
 MOD = Namespace("https://w3id.org/mod#")
 OCMV = Namespace("https://w3id.org/ontouml-models/vocabulary#")
 OWL = Namespace("http://www.w3.org/2002/07/owl#")
-VCARD = Namespace("http://www.w3.org/2006/vcard/ns#")
 
 DEFAULT_CATALOG_IRI = (
     "https://w3id.org/ontouml-models/catalog/b663ca18-8085-44a7-bcfe-2c2b5ba1faa8"
@@ -139,7 +138,6 @@ FIELD_ALIASES: dict[str, tuple[str, ...]] = {
         "dct:bibliographicCitation",
     ),
     "storage_url": ("storage_url", "storageUrl", "ocmv:storageUrl"),
-    "contact_points": ("contact_points", "contactPoints", "dcat:contactPoint"),
     "keyword": ("keyword", "keywords", "dcat:keyword"),
     "acronym": ("acronym", "mod:acronym"),
     "source": ("source", "sources", "dct:source"),
@@ -312,7 +310,6 @@ def bind_prefixes(graph: Graph) -> None:
     graph.bind("rdf", RDF)
     graph.bind("rdfs", RDFS)
     graph.bind("skos", SKOS)
-    graph.bind("vcard", VCARD)
     graph.bind("xsd", XSD)
 
 
@@ -770,8 +767,10 @@ def metadata_timestamp_literals(
         )
     else:
         raise MetadataConversionError(
-            f"No existing fdpo:metadataIssued found in {ttl_path}. "
-            "Provide metadata_issued in metadata.yaml or pass --metadata-timestamp for new metadata.ttl files."
+            f"No fdpo:metadataIssued value is available for {ttl_path}. "
+            "Existing metadata.ttl files that lack FDP metadata timestamps and new metadata.ttl files "
+            "must be regenerated with metadata_issued in metadata.yaml or with --metadata-timestamp, "
+            "for example --metadata-timestamp 2026-01-31T12:00:00Z."
         )
 
     if existing.metadata_modified is not None:
@@ -835,44 +834,6 @@ def literal_objects(
     if value is None:
         return []
     return list(literal_values(value, field_name, default_lang=default_lang))
-
-
-def contact_point_objects(value: Any) -> list[str]:
-    """Return inline Turtle blank-node strings for dcat:contactPoint values."""
-
-    contacts: list[str] = []
-    for index, item in enumerate(as_list(value), start=1):
-        if not isinstance(item, Mapping):
-            raise MetadataConversionError(
-                "Each contact point must be a mapping with at least an email field."
-            )
-        email = (
-            mapping_get_normalized(item, "email")
-            or mapping_get_normalized(item, "hasEmail")
-            or mapping_get_normalized(item, "vcard:hasEmail")
-        )
-        name = (
-            mapping_get_normalized(item, "name")
-            or mapping_get_normalized(item, "fn")
-            or mapping_get_normalized(item, "vcard:fn")
-        )
-        if not email:
-            raise MetadataConversionError(
-                f"Contact point #{index} is missing an email."
-            )
-        email_text = str(email).strip()
-        if not email_text.startswith("mailto:"):
-            email_text = "mailto:" + email_text
-        email_term = make_uri(
-            email_text,
-            field_name="contact_points.email",
-            allowed_schemes=("mailto",),
-        ).n3(NS_MANAGER)
-        parts = ["a vcard:Individual", f"vcard:hasEmail {email_term}"]
-        if name:
-            parts.append(f"vcard:fn {Literal(str(name)).n3(NS_MANAGER)}")
-        contacts.append("[ " + "; ".join(parts) + " ]")
-    return contacts
 
 
 def distribution_iri(model_iri: URIRef, item: Any, index: int) -> URIRef:
@@ -959,7 +920,6 @@ def render_turtle(
         "@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .",
         "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .",
         "@prefix skos: <http://www.w3.org/2004/02/skos/core#> .",
-        "@prefix vcard: <http://www.w3.org/2006/vcard/ns#> .",
         "@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .",
         "",
         f"{subject.n3(NS_MANAGER)} a dcat:Dataset, mod:SemanticArtefact, dcat:Resource;",
@@ -1091,7 +1051,7 @@ def build_turtle(
         append_predicate(
             statements,
             DCAT.landingPage,
-            [make_uri(str(landing_page), field_name="landing_page")],
+            uri_objects(landing_page, "landing_page"),
         )
     if license_ref is not None:
         append_predicate(statements, DCT.license, [license_ref])
@@ -1180,11 +1140,6 @@ def build_turtle(
             for item in as_list(canonical_value(data, "ontology_type"))
         ],
     )
-    contact_points = canonical_value(data, "contact_points")
-    if contact_points:
-        append_predicate(
-            statements, DCAT.contactPoint, contact_point_objects(contact_points)
-        )
     append_predicate(
         statements, OCMV.storageUrl, [Literal(storage_url.strip(), datatype=XSD.anyURI)]
     )

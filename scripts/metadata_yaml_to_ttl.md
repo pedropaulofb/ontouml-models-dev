@@ -67,6 +67,12 @@ Generate `metadata.ttl` for all datasets under `models/`:
 python scripts/metadata_yaml_to_ttl.py --all --models-dir models
 ```
 
+If some existing or new datasets do not have `fdpo:metadataIssued` in `metadata.ttl` and do not define `metadata_issued` in `metadata.yaml`, provide an explicit deterministic timestamp for the generation run:
+
+```bash
+python scripts/metadata_yaml_to_ttl.py --all --models-dir models --metadata-timestamp 2026-01-31T12:00:00Z
+```
+
 Allow legacy datasets without license metadata:
 
 ```bash
@@ -129,7 +135,7 @@ For new datasets that do not yet have `metadata.ttl`, the converter uses:
 - a deterministic UUIDv5 model IRI derived from the dataset folder name;
 - the default catalog IRI;
 - a default GitHub storage URL derived from `--repository`, `--branch`, `--models-dir`, and the dataset folder name;
-- `fdpo:metadataIssued` / `fdpo:metadataModified` from `metadata.yaml` when present, provided they resolve to valid `xsd:dateTime` lexical values; scalar values and simple mapping forms such as `{value: 2026-01-31T12:00:00Z}` are accepted.
+- `fdpo:metadataIssued` / `fdpo:metadataModified` from `metadata.yaml` when present, provided they are scalar valid `xsd:dateTime` lexical values. Mapping forms are intentionally not supported because they are not accepted by the metadata.yaml validator/fixer.
 
 If a new dataset does not define `metadata_issued` / `metadata_modified` in `metadata.yaml`, pass an explicit timestamp:
 
@@ -137,7 +143,7 @@ If a new dataset does not define `metadata_issued` / `metadata_modified` in `met
 python scripts/metadata_yaml_to_ttl.py models/new-dataset --metadata-timestamp 2026-01-31T12:00:00Z
 ```
 
-Use `--metadata-timestamp now` only when non-deterministic current timestamps are intentionally acceptable. Existing datasets keep their current `fdpo:metadataIssued` and `fdpo:metadataModified` values by default.
+Use `--metadata-timestamp now` only when non-deterministic current timestamps are intentionally acceptable. Existing datasets keep their current `fdpo:metadataIssued` and `fdpo:metadataModified` values by default. Existing datasets that currently lack FDP metadata timestamps require either scalar YAML timestamps or `--metadata-timestamp`; this avoids silently inventing catalog metadata timestamps.
 
 ## Exit codes
 
@@ -153,7 +159,7 @@ A typical CI sequence for future dataset submissions is:
 
 ```bash
 python scripts/validate_metadata_yaml.py --all --fix --allow-missing-license
-python scripts/metadata_yaml_to_ttl.py --all --check --allow-missing-license
+python scripts/metadata_yaml_to_ttl.py --all --check --allow-missing-license --metadata-timestamp 2026-01-31T12:00:00Z
 ```
 
 For stricter future-only validation where license must be present, omit `--allow-missing-license`.

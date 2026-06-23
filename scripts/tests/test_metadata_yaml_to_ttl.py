@@ -375,7 +375,9 @@ def test_license_alias_https_lcc_theme_and_controlled_values(tmp_path: Path):
     assert_parseable_turtle(dataset / "metadata.ttl")
 
 
-def test_language_maps_contact_points_and_distribution_deduplication(tmp_path: Path):
+def test_language_maps_ignore_unsupported_contact_points_and_distribution_deduplication(
+    tmp_path: Path,
+):
     module = load_module()
     dataset = tmp_path / "models" / "rich-yaml-model"
     write_metadata_yaml(dataset)
@@ -400,8 +402,9 @@ distribution:
     generated = (dataset / "metadata.ttl").read_text(encoding="utf-8")
     assert 'dct:title "Reference Ontology of Trust"@en' in generated
     assert '"Ontologia de Confiança"@pt' in generated
-    assert "a vcard:Individual" in generated
-    assert "mailto:maintainer@example.org" in generated
+    assert "vcard:" not in generated
+    assert "dcat:contactPoint" not in generated
+    assert "maintainer@example.org" not in generated
     assert generated.count("https://w3id.org/ontouml-models/distribution/one/") == 1
     assert "distribution/extra-local-distribution" in generated
     assert_parseable_turtle(dataset / "metadata.ttl")
@@ -706,3 +709,63 @@ def test_fdp_timestamp_mapping_form_is_rejected_to_match_yaml_validator(tmp_path
         module.convert_dataset(dataset, module.Config())
 
     assert not (dataset / "metadata.ttl").exists()
+
+
+def test_landing_page_accepts_multiple_urls_like_validator(tmp_path: Path):
+    module = load_module()
+    dataset = tmp_path / "models" / "core-o2023"
+    write_metadata_yaml(dataset)
+    text = (dataset / "metadata.yaml").read_text(encoding="utf-8")
+    text = text.replace(
+        "landingPage: https://github.com/unibz-core/trust-ontology\n",
+        "landingPage:\n"
+        " - https://core-o.github.io/ontology/\n"
+        " - https://github.com/core-o\n"
+        " - https://purl.org/coreo\n",
+    )
+    (dataset / "metadata.yaml").write_text(text, encoding="utf-8")
+
+    module.convert_dataset(
+        dataset,
+        module.Config(metadata_timestamp="2026-01-31T12:00:00Z"),
+    )
+
+    generated = (dataset / "metadata.ttl").read_text(encoding="utf-8")
+    assert "dcat:landingPage <https://core-o.github.io/ontology/>" in generated
+    assert "<https://github.com/core-o>" in generated
+    assert "<https://purl.org/coreo>" in generated
+    assert_parseable_turtle(dataset / "metadata.ttl")
+
+
+def test_existing_metadata_without_fdp_timestamp_requires_explicit_timestamp(
+    tmp_path: Path,
+):
+    module = load_module()
+    dataset = tmp_path / "models" / "existing-without-fdp"
+    write_metadata_yaml(dataset)
+    (dataset / "metadata.ttl").write_text(
+        """
+@prefix dcat: <http://www.w3.org/ns/dcat#>.
+@prefix dct: <http://purl.org/dc/terms/>.
+@prefix mod: <https://w3id.org/mod#>.
+
+<https://w3id.org/ontouml-models/model/existing-without-fdp/> a dcat:Dataset, mod:SemanticArtefact, dcat:Resource;
+    dct:title "Existing without FDP" .
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        module.MetadataConversionError,
+        match="--metadata-timestamp 2026-01-31T12:00:00Z",
+    ):
+        module.convert_dataset(dataset, module.Config())
+
+    module.convert_dataset(
+        dataset,
+        module.Config(metadata_timestamp="2026-01-31T12:00:00Z"),
+    )
+    generated = (dataset / "metadata.ttl").read_text(encoding="utf-8")
+    assert "2026-01-31T12:00:00Z" in generated
+    assert_parseable_turtle(dataset / "metadata.ttl")
