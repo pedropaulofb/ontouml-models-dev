@@ -20,7 +20,9 @@ models/example/metadata-png-n-main-diagram.ttl
 
 The script generates distribution-level metadata for PNG diagram images. It is intended to run **before** model-level `metadata.ttl` is generated.
 
-The model-level source of truth is `metadata.yaml`. The PNG generator does **not** read or update `metadata.ttl`, and it does **not** add model-level `dcat:distribution` triples. Instead, each generated PNG metadata file points back to the model with `dct:isPartOf`.
+The model-level source of truth is `metadata.yaml`. The PNG generator does **not** update `metadata.ttl`, and it does **not** add model-level `dcat:distribution` triples. Instead, each generated PNG metadata file points back to the model with `dct:isPartOf`.
+
+For existing catalog datasets, the script preserves the already published model W3ID used in `dct:isPartOf`. When an existing model-level `metadata.ttl` is present, its model subject is treated as the canonical model URI. If `metadata.ttl` is absent, the script falls back to existing `metadata-png-*.ttl` files. This is not a generation-order dependency: when `metadata.ttl` is absent, the script still runs and uses the same deterministic UUIDv5 model URI strategy as `scripts/metadata_yaml_to_ttl.py`.
 
 Recommended future generation order:
 
@@ -41,7 +43,7 @@ For each PNG file, the script creates a `dcat:Distribution` metadata file follow
 The generated distribution includes:
 
 - `rdf:type dcat:Distribution`
-- `dct:isPartOf`, pointing to the model dataset URI derived from `metadata.yaml`
+- `dct:isPartOf`, pointing to the preserved or generated model dataset URI
 - `dct:issued`, derived from the model-level `metadata.yaml`
 - `dct:license`, copied from existing PNG metadata or derived from model-level `metadata.yaml` when available
 - `dct:title`
@@ -57,6 +59,7 @@ The generated distribution includes:
 When regenerating an existing PNG metadata file, the script preserves curated values that should not be changed accidentally:
 
 - the existing distribution URI;
+- the existing model URI used in `dct:isPartOf`;
 - `dct:title`;
 - `skos:editorialNote`;
 - `dcat:downloadURL`;
@@ -73,7 +76,7 @@ Timestamp handling follows the same maintenance strategy used by `scripts/metada
 - if an existing PNG metadata file changes during regeneration, `fdpo:metadataModified` is updated from `--metadata-timestamp`;
 - if an existing PNG metadata file is already up to date, `fdpo:metadataModified` is preserved.
 
-For existing files, the script still regenerates the remaining triples from model metadata and script defaults, including `dct:isPartOf`, `dct:issued`, `dcat:mediaType`, and `ocmv:isComplete`.
+For existing files, the script still regenerates the remaining triples from model metadata and script defaults, including `dct:issued`, `dcat:mediaType`, and `ocmv:isComplete`. The `dct:isPartOf` value is preserved from existing `metadata.ttl` when present, or otherwise from existing PNG metadata.
 
 ## License handling
 
@@ -142,6 +145,17 @@ The deterministic UUID input is:
 For example, if the same PNG filename exists in both `original-diagrams` and `new-diagrams`, the generated UUIDs differ because the diagram folder is part of the UUID input.
 
 This keeps new-file generation reproducible while preserving the catalog's established UUID-based distribution URI pattern.
+
+## Model identifiers used in `dct:isPartOf`
+
+The script resolves the model URI for PNG distribution metadata in this order:
+
+1. the subject URI of an existing model-level `metadata.ttl`, when available;
+2. an existing `dct:isPartOf` value in any `metadata-png-*.ttl` file in the dataset folder, when `metadata.ttl` is absent;
+3. an explicit HTTP(S) model URI in `metadata.yaml`, if present;
+4. a deterministic UUIDv5 URI generated from the dataset folder name, using the same strategy as `scripts/metadata_yaml_to_ttl.py`.
+
+This prevents existing UUID-based model W3IDs such as `https://w3id.org/ontouml-models/model/<uuid>` from being replaced by folder-name IRIs such as `https://w3id.org/ontouml-models/model/<folder-name>` during PNG metadata regeneration. For new datasets where no model-level `metadata.ttl` exists yet, the deterministic UUIDv5 fallback keeps the PNG generator compatible with the later `metadata.yaml` to `metadata.ttl` conversion step.
 
 ## Download URLs
 
@@ -295,6 +309,7 @@ python ../../scripts/generate_png_metadata.py \
 | `--repository OWNER/REPO` | No | `OntoUML/ontouml-models` | GitHub repository used for generated `dcat:downloadURL` values. |
 | `--branch BRANCH` | No | `master` | Git branch used for generated `dcat:downloadURL` values. |
 | `--models-dir-name PATH` | No | `models` | Repository-relative models path used inside generated `dcat:downloadURL` values. |
+| `--model-iri-base IRI` | No | `https://w3id.org/ontouml-models/model` | Base IRI used for deterministic UUIDv5 model IRIs when no existing catalog model IRI is available. |
 | `--no-overwrite` | No | overwrite enabled | Fail if a target metadata file already exists. |
 | `--strict` | No | off | Fail if an expected diagram folder is missing or empty. |
 | `--include-file-metadata` | No | off | Also add optional byte size, SHA-256 checksum, width, and height triples. |
@@ -312,8 +327,9 @@ The model-level `metadata.yaml` must provide enough information for the script t
 
 - the model title;
 - the model issued date;
-- the model URI, or an identifier/slug from which the standard catalog model URI can be derived;
 - the model license, unless `--allow-missing-license` is used for a legacy dataset.
+
+The model URI is preserved from existing catalog metadata when available. Otherwise, it is generated deterministically from the dataset folder name using the same UUIDv5 approach used by the model-level metadata converter.
 
 Each dataset must contain at least one PNG file in one of these folders:
 

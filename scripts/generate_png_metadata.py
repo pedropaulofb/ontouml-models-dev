@@ -13,9 +13,11 @@ Run from the repository root, for example:
     python scripts/generate_png_metadata.py --all --models-dir models --allow-missing-license
 
 The model-level source of truth is metadata.yaml. Existing metadata-png-*.ttl
-files are read only to preserve stable distribution identifiers and curated
-PNG-level values during regeneration. The script does not read or update
-metadata.ttl.
+files are read only to preserve stable distribution identifiers, existing model
+W3IDs used by dct:isPartOf, and curated PNG-level values during regeneration.
+The script does not update metadata.ttl; it only reads an existing metadata.ttl
+as a compatibility fallback when no existing PNG metadata file exposes the
+model W3ID.
 """
 
 from __future__ import annotations
@@ -34,7 +36,7 @@ from dataclasses import asdict, dataclass
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Mapping, Optional, Sequence
+from typing import Any, Iterable, Mapping, Optional, Sequence
 from urllib.parse import quote
 
 try:
@@ -63,6 +65,7 @@ DISTRIBUTION_BASE = "https://w3id.org/ontouml-models/distribution/"
 DEFAULT_REPOSITORY = "OntoUML/ontouml-models"
 DEFAULT_BRANCH = "master"
 DEFAULT_MODELS_DIR = "models"
+DEFAULT_MODEL_IRI_BASE = "https://w3id.org/ontouml-models/model"
 
 DIAGRAM_SOURCES = {
     "original-diagrams": "o",
@@ -101,6 +104,14 @@ XSD_DATETIME_RE = re.compile(
 HTTP_URI_RE = re.compile(r"^https?://", re.I)
 DISTRIBUTION_IRI_RE = re.compile(r"<([^>]+)>\s+a\s+[^.;]*\bdcat:Distribution\b", re.S)
 URI_RE = re.compile(r"<([^>]+)>")
+MODEL_IRI_RE = re.compile(
+    r"<(?P<iri>https://w3id\.org/ontouml-models/model/[^>]+/?)>\s+a\s+[^.;]*\bdcat:Dataset\b",
+    re.S,
+)
+IS_PART_OF_RE = re.compile(r"\bdct:isPartOf\s+<([^>]+)>", re.S)
+FULL_IS_PART_OF_RE = re.compile(
+    r"<http://purl\.org/dc/terms/isPartOf>\s+<([^>]+)>", re.S
+)
 PREFIXED_DATETIME_RE_TEMPLATE = r"\bfdpo:{name}\s+\"([^\"]+)\"\^\^xsd:dateTime"
 FULL_DATETIME_RE_TEMPLATE = (
     r"<https://w3id\.org/fdp/fdp-o#{name}>\s+\"([^\"]+)\"\^\^"
@@ -123,6 +134,7 @@ class Config:
     repository: str = DEFAULT_REPOSITORY
     branch: str = DEFAULT_BRANCH
     models_dir_name: str = DEFAULT_MODELS_DIR
+    model_iri_base: str = DEFAULT_MODEL_IRI_BASE
     overwrite: bool = True
     strict: bool = False
     dry_run: bool = False
@@ -151,6 +163,7 @@ class ExistingDistributionMetadata:
     """Reusable metadata found in an existing distribution metadata file."""
 
     uri: Optional[URIRef] = None
+    model_uri: Optional[URIRef] = None
     title: Optional[Literal] = None
     editorial_note: Optional[Literal] = None
     download_url: Optional[URIRef] = None
@@ -389,19 +402,26 @@ def uri_from_text(value: str, *, field_name: str) -> URIRef:
     return URIRef(text)
 
 
-def yaml_model_uri(value: Any, dataset_slug: str) -> URIRef:
-    """Return the model URI from YAML or from the dataset identifier."""
+def deterministic_model_uri(dataset_folder: Path, model_iri_base: str) -> URIRef:
+    """Return the converter-compatible deterministic model URI for a new dataset."""
+
+    slug = dataset_folder.name.strip().strip("/")
+    if not slug:
+        raise MetadataGenerationError(
+            "Could not infer model URI because the dataset folder has no name."
+        )
+    base = model_iri_base.rstrip("/")
+    generated_uuid = uuid.uuid5(uuid.NAMESPACE_URL, f"{base}|{slug}")
+    return URIRef(f"{base}/{generated_uuid}")
+
+
+def yaml_model_uri(value: Any, dataset_folder: Path, model_iri_base: str) -> URIRef:
+    """Return an explicit YAML model URI or the converter-compatible deterministic URI."""
 
     text = yaml_text(value)
     if text and HTTP_URI_RE.match(text):
         return normalize_model_uri(URIRef(text))
-    slug = text or dataset_slug
-    slug = slug.strip().strip("/")
-    if not slug:
-        raise MetadataGenerationError(
-            "Could not determine model URI from metadata.yaml."
-        )
-    return URIRef(f"https://w3id.org/ontouml-models/model/{slug}")
+    return deterministic_model_uri(dataset_folder, model_iri_base)
 
 
 def yaml_license_uri(value: Any) -> Optional[URIRef]:
@@ -495,13 +515,12 @@ def load_model_metadata(dataset_folder: Path, config: Config) -> ModelMetadata:
                 ("uri",),
                 ("modelUri",),
                 ("model", "uri"),
-                ("model", "id"),
                 ("metadata", "uri"),
                 ("resource", "uri"),
-                ("id",),
             ),
         ),
-        dataset_folder.name,
+        dataset_folder,
+        config.model_iri_base,
     )
 
     license_ref = yaml_license_uri(
@@ -534,6 +553,88 @@ def load_model_metadata(dataset_folder: Path, config: Config) -> ModelMetadata:
         license_uri=license_ref,
         issued=issued_literal,
     )
+
+
+def is_part_of_uri_from_text(text: str) -> Optional[URIRef]:
+    """Extract a distribution dct:isPartOf URI from Turtle text without full parsing."""
+
+    match = IS_PART_OF_RE.search(text) or FULL_IS_PART_OF_RE.search(text)
+    return normalize_model_uri(URIRef(match.group(1))) if match else None
+
+
+def model_uri_from_metadata_ttl(path: Path) -> Optional[URIRef]:
+    """Extract the model dataset URI from an existing model-level metadata.ttl file."""
+
+    if not path.exists():
+        return None
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise MetadataGenerationError(
+            f"Could not read existing metadata.ttl {path}: {exc}"
+        ) from exc
+    match = MODEL_IRI_RE.search(text)
+    return normalize_model_uri(URIRef(match.group("iri"))) if match else None
+
+
+def unique_existing_model_uri(
+    uris: Iterable[URIRef], source_description: str
+) -> Optional[URIRef]:
+    """Return one existing model URI or fail on conflicting preserved values."""
+
+    normalized = sorted(
+        {str(normalize_model_uri(uri)) for uri in uris if uri is not None}
+    )
+    if not normalized:
+        return None
+    if len(normalized) > 1:
+        raise MetadataGenerationError(
+            f"Conflicting model URIs found in {source_description}: "
+            + ", ".join(normalized)
+        )
+    return URIRef(normalized[0])
+
+
+def discover_existing_png_model_uri(dataset_folder: Path) -> Optional[URIRef]:
+    """Discover the preserved model URI from existing PNG metadata files, if any."""
+
+    model_uris: list[URIRef] = []
+    for path in sorted(dataset_folder.glob("metadata-png-*.ttl")):
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise MetadataGenerationError(
+                f"Could not read existing PNG metadata {path}: {exc}"
+            ) from exc
+        uri = is_part_of_uri_from_text(text)
+        if uri is not None:
+            model_uris.append(uri)
+    return unique_existing_model_uri(
+        model_uris, f"existing PNG metadata files in {dataset_folder}"
+    )
+
+
+def resolve_model_uri(dataset_folder: Path, yaml_uri: URIRef) -> URIRef:
+    """Return the model URI to use in PNG distribution metadata.
+
+    Existing catalog datasets historically use UUID-based model W3IDs. Because
+    metadata.yaml does not contain those identifiers, preserve them from existing
+    metadata.ttl when available. This also repairs accidental slug-based
+    dct:isPartOf values produced by earlier regeneration attempts. If metadata.ttl
+    is absent, preserve the URI from existing PNG distribution metadata when
+    possible. If neither exists, use the same deterministic UUIDv5 model URI
+    strategy as metadata_yaml_to_ttl.py for new datasets.
+    """
+
+    existing_model_ttl_uri = model_uri_from_metadata_ttl(
+        dataset_folder / "metadata.ttl"
+    )
+    if existing_model_ttl_uri is not None:
+        return existing_model_ttl_uri
+    existing_png_uri = discover_existing_png_model_uri(dataset_folder)
+    if existing_png_uri is not None:
+        return existing_png_uri
+    return yaml_uri
 
 
 def prefixed_datetime_literal_from_text(text: str, name: str) -> Optional[Literal]:
@@ -591,8 +692,14 @@ def read_existing_metadata(path: Path) -> ExistingDistributionMetadata:
 
     download_url = first_object(graph, subject, DCAT.downloadURL)
     license_uri = first_object(graph, subject, DCT.license)
+    model_uri = first_object(graph, subject, DCT.isPartOf) or is_part_of_uri_from_text(
+        text
+    )
     return ExistingDistributionMetadata(
         uri=URIRef(subject),
+        model_uri=normalize_model_uri(URIRef(model_uri))
+        if model_uri is not None
+        else None,
         title=first_object(graph, subject, DCT.title),
         editorial_note=first_object(graph, subject, SKOS.editorialNote),
         download_url=URIRef(download_url) if download_url is not None else None,
@@ -965,6 +1072,14 @@ def process_dataset(dataset_folder: Path, config: Config) -> list[GeneratedFile]
 
     dataset_folder = validate_dataset_folder(dataset_folder)
     model = load_model_metadata(dataset_folder, config)
+    resolved_uri = resolve_model_uri(dataset_folder, model.uri)
+    if resolved_uri != model.uri:
+        model = ModelMetadata(
+            uri=resolved_uri,
+            title=model.title,
+            license_uri=model.license_uri,
+            issued=model.issued,
+        )
     diagrams = collect_diagrams(dataset_folder, model, config)
 
     existing_targets = [
@@ -1132,6 +1247,11 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         help=f"Repository-relative models path used inside generated dcat:downloadURL values. Default: {DEFAULT_MODELS_DIR}.",
     )
     parser.add_argument(
+        "--model-iri-base",
+        default=DEFAULT_MODEL_IRI_BASE,
+        help=f"Base IRI used for deterministic UUIDv5 model IRIs when no existing catalog model IRI is available. Default: {DEFAULT_MODEL_IRI_BASE}.",
+    )
+    parser.add_argument(
         "--no-overwrite",
         action="store_true",
         help="Fail if a target metadata file already exists.",
@@ -1209,6 +1329,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         repository=args.repository,
         branch=args.branch,
         models_dir_name=args.models_dir_name,
+        model_iri_base=args.model_iri_base,
         overwrite=not args.no_overwrite,
         strict=args.strict,
         dry_run=args.dry_run,

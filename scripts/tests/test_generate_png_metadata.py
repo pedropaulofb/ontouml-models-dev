@@ -4,6 +4,7 @@ import importlib.util
 import struct
 import sys
 import zlib
+import uuid
 from pathlib import Path
 
 import pytest
@@ -71,6 +72,13 @@ issued: {issued}
     )
 
 
+def deterministic_model_uri(slug: str) -> str:
+    model_uuid = uuid.uuid5(
+        uuid.NAMESPACE_URL, f"https://w3id.org/ontouml-models/model|{slug}"
+    )
+    return f"https://w3id.org/ontouml-models/model/{model_uuid}"
+
+
 def write_dataset(tmp_path: Path) -> Path:
     dataset = tmp_path / "models" / "example-model"
     (dataset / "original-diagrams").mkdir(parents=True)
@@ -87,6 +95,7 @@ def write_dataset(tmp_path: Path) -> Path:
 @prefix xsd: <http://www.w3.org/2001/XMLSchema#>.
 
 <https://w3id.org/ontouml-models/distribution/original-existing> a dcat:Distribution;
+    dct:isPartOf <https://w3id.org/ontouml-models/model/0647761f-976f-41c4-94c0-a907ae1ed577>;
     dct:title "Existing original PNG title"@en;
     dcat:downloadURL <https://raw.githubusercontent.com/OntoUML/ontouml-models/master/models/example-model/original-diagrams/petroleum-system.png>;
     skos:editorialNote "Existing original editorial note."@en;
@@ -133,7 +142,11 @@ def test_png_metadata_generation_uses_metadata_yaml_when_metadata_ttl_is_absent(
 
     new = (dataset / "metadata-png-n-petroleum-system.ttl").read_text(encoding="utf-8")
     assert "ocmv:isComplete false" in new
-    assert "dct:isPartOf <https://w3id.org/ontouml-models/model/example>" in new
+    assert (
+        "dct:isPartOf <https://w3id.org/ontouml-models/model/0647761f-976f-41c4-94c0-a907ae1ed577>"
+        in new
+    )
+    assert "dct:isPartOf <https://w3id.org/ontouml-models/model/example>" not in new
     assert 'dct:issued "2015"^^xsd:gYear' in new
     assert "https://creativecommons.org/licenses/by/4.0/" in new
     assert (
@@ -148,6 +161,109 @@ def test_png_metadata_generation_uses_metadata_yaml_when_metadata_ttl_is_absent(
         "PNG distribution of diagram 'petroleum system' from the Petroleum System Model (Visual Paradigm version)"
         in new
     )
+
+
+def test_new_dataset_uses_converter_compatible_deterministic_model_uri(tmp_path: Path):
+    module = load_module()
+    dataset = tmp_path / "models" / "new-deterministic-model"
+    (dataset / "original-diagrams").mkdir(parents=True)
+    (dataset / "original-diagrams" / "diagram.png").write_bytes(minimal_png())
+    write_metadata_yaml(
+        dataset,
+        slug="ignored-yaml-id",
+        title="New Deterministic Model",
+        issued="2024",
+    )
+
+    module.process_dataset(
+        dataset, module.Config(metadata_timestamp="2024-01-02T03:04:05Z")
+    )
+
+    generated = (dataset / "metadata-png-o-diagram.ttl").read_text(encoding="utf-8")
+    assert (
+        f"dct:isPartOf <{deterministic_model_uri('new-deterministic-model')}>"
+        in generated
+    )
+    assert "ignored-yaml-id" not in generated
+
+
+def test_existing_metadata_ttl_model_uri_is_used_when_png_metadata_has_no_is_part_of(
+    tmp_path: Path,
+):
+    module = load_module()
+    dataset = tmp_path / "models" / "existing-model-uri"
+    (dataset / "original-diagrams").mkdir(parents=True)
+    (dataset / "original-diagrams" / "diagram.png").write_bytes(minimal_png())
+    write_metadata_yaml(
+        dataset, slug="existing-model-uri", title="Existing Model URI", issued="2024"
+    )
+    (dataset / "metadata.ttl").write_text(
+        """
+@prefix dcat: <http://www.w3.org/ns/dcat#>.
+@prefix mod: <https://w3id.org/mod#>.
+
+<https://w3id.org/ontouml-models/model/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/> a dcat:Dataset, mod:SemanticArtefact, dcat:Resource .
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    module.process_dataset(
+        dataset, module.Config(metadata_timestamp="2024-01-02T03:04:05Z")
+    )
+
+    generated = (dataset / "metadata-png-o-diagram.ttl").read_text(encoding="utf-8")
+    assert (
+        "dct:isPartOf <https://w3id.org/ontouml-models/model/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee>"
+        in generated
+    )
+
+
+def test_existing_metadata_ttl_takes_precedence_over_png_is_part_of(tmp_path: Path):
+    module = load_module()
+    dataset = tmp_path / "models" / "png-model-uri"
+    (dataset / "original-diagrams").mkdir(parents=True)
+    (dataset / "new-diagrams").mkdir()
+    (dataset / "original-diagrams" / "diagram.png").write_bytes(minimal_png())
+    (dataset / "new-diagrams" / "diagram.png").write_bytes(minimal_png())
+    write_metadata_yaml(
+        dataset, slug="png-model-uri", title="PNG Model URI", issued="2024"
+    )
+    (dataset / "metadata.ttl").write_text(
+        """
+@prefix dcat: <http://www.w3.org/ns/dcat#>.
+@prefix mod: <https://w3id.org/mod#>.
+
+<https://w3id.org/ontouml-models/model/from-metadata-ttl/> a dcat:Dataset, mod:SemanticArtefact, dcat:Resource .
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (dataset / "metadata-png-o-diagram.ttl").write_text(
+        """
+@prefix dcat: <http://www.w3.org/ns/dcat#>.
+@prefix dct: <http://purl.org/dc/terms/>.
+@prefix fdpo: <https://w3id.org/fdp/fdp-o#>.
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#>.
+
+<https://w3id.org/ontouml-models/distribution/existing-png-model-uri> a dcat:Distribution;
+    dct:isPartOf <https://w3id.org/ontouml-models/model/from-existing-png>;
+    fdpo:metadataIssued "2023-04-14T17:33:24.802284319Z"^^xsd:dateTime;
+    fdpo:metadataModified "2023-04-14T17:33:25.802284319Z"^^xsd:dateTime .
+""".strip(),
+        encoding="utf-8",
+    )
+
+    module.process_dataset(
+        dataset, module.Config(metadata_timestamp="2024-01-02T03:04:05Z")
+    )
+
+    new_generated = (dataset / "metadata-png-n-diagram.ttl").read_text(encoding="utf-8")
+    assert (
+        "dct:isPartOf <https://w3id.org/ontouml-models/model/from-metadata-ttl>"
+        in new_generated
+    )
+    assert "from-existing-png" not in new_generated
 
 
 def test_missing_license_fails_without_allow_missing_license(tmp_path: Path):
