@@ -111,6 +111,7 @@ def test_regeneration_preserves_existing_catalog_managed_values(tmp_path: Path):
     assert result.written is True
     assert "Reference Ontology of Trust" in generated
     assert "Old title" not in generated
+    assert "@prefix owl:" not in generated
     assert (
         "https://w3id.org/ontouml-models/model/d88fe48c-d574-43b4-85d6-a6e1aeaa6726/"
         in generated
@@ -150,6 +151,7 @@ def test_new_dataset_uses_deterministic_model_iri_and_explicit_timestamp(
     assert second.written is False
     assert first_text == second_text
     assert "metadata-turtle.ttl" not in first_text
+    assert "@prefix owl:" not in first_text
     assert "2026-01-31T12:00:00Z" in first_text
     assert "models/new-model" in first_text
     assert_parseable_turtle(dataset / "metadata.ttl")

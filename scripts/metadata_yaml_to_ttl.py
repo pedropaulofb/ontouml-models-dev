@@ -36,7 +36,7 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Literal as TypingLiteral, Mapping, Optional, Sequence
+from typing import Any, Iterable, Mapping, Optional, Sequence
 from urllib.parse import urlparse
 
 try:
@@ -58,15 +58,12 @@ except (
         "RDFLib is required. Install it with: python -m pip install -r scripts/requirements.txt"
     ) from exc
 
-OutputFormat = TypingLiteral["text", "json"]
-
 DCAT = Namespace("http://www.w3.org/ns/dcat#")
 DCT = Namespace("http://purl.org/dc/terms/")
 FDPO = Namespace("https://w3id.org/fdp/fdp-o#")
 LCC = Namespace("http://id.loc.gov/authorities/classification/")
 MOD = Namespace("https://w3id.org/mod#")
 OCMV = Namespace("https://w3id.org/ontouml-models/vocabulary#")
-OWL = Namespace("http://www.w3.org/2002/07/owl#")
 
 DEFAULT_CATALOG_IRI = (
     "https://w3id.org/ontouml-models/catalog/b663ca18-8085-44a7-bcfe-2c2b5ba1faa8"
@@ -308,7 +305,6 @@ def bind_prefixes(graph: Graph) -> None:
     graph.bind("lcc", LCC)
     graph.bind("mod", MOD)
     graph.bind("ocmv", OCMV)
-    graph.bind("owl", OWL)
     graph.bind("rdf", RDF)
     graph.bind("rdfs", RDFS)
     graph.bind("skos", SKOS)
@@ -999,7 +995,6 @@ def render_turtle(
         "@prefix lcc: <http://id.loc.gov/authorities/classification/> .",
         "@prefix mod: <https://w3id.org/mod#> .",
         "@prefix ocmv: <https://w3id.org/ontouml-models/vocabulary#> .",
-        "@prefix owl: <http://www.w3.org/2002/07/owl#> .",
         "@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .",
         "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .",
         "@prefix skos: <http://www.w3.org/2004/02/skos/core#> .",
