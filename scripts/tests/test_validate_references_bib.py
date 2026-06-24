@@ -800,3 +800,161 @@ def test_current_directory_without_target_is_reported_as_usage_error(
 
     assert exit_code == 2
     assert "No target provided" in captured.err
+
+
+def test_bachelorsthesis_and_masterthesis_are_known_entry_types(tmp_path: Path):
+    module = load_module()
+    dataset = make_dataset(
+        tmp_path,
+        bib_text="""@bachelorsthesis{bsc2024,
+  author = {Example, Alice},
+  title = {Bachelor thesis example},
+  school = {Example University},
+  year = {2024}
+}
+
+@masterthesis{msc2024,
+  author = {Example, Bob},
+  title = {Master thesis example},
+  school = {Example University},
+  year = {2024}
+}
+""",
+    )
+    validator = module.ReferencesBibValidator(module.Config())
+
+    result = validator.validate_target(dataset)
+
+    assert result.valid
+    assert result.entries_checked == 2
+    assert not any(issue.code == "unknown_entry_type" for issue in result.warnings)
+
+
+def test_braced_value_accepts_literal_quotes_and_latex_macros(tmp_path: Path):
+    module = load_module()
+    dataset = make_dataset(
+        tmp_path,
+        bib_text=r"""@phdthesis{moreira2019semiotics,
+  title = {SEMIoTICS: Semantic Model-driven Development for IoT Interoperability of Emergency Services},
+  author = {Moreira, {Jo{\~a}o Luiz}},
+  year = {2019},
+  abstract = {This abstract contains "quoted text", drivers{\textquoteright} vital signs, JSON-LD examples, and contributions:{\textbullet{} Improved IoT Semantic Interoperability;\textbullet{} Improved Situation Identification}.},
+  language = {English}
+}
+""",
+    )
+    validator = module.ReferencesBibValidator(module.Config())
+
+    result = validator.validate_target(dataset)
+
+    assert result.valid
+    assert result.entries_checked == 1
+    assert result.errors == []
+
+
+def test_braced_value_accepts_repository_style_long_abstract_regression(tmp_path: Path):
+    module = load_module()
+    dataset = make_dataset(
+        tmp_path,
+        bib_text=r"""@phdthesis{moreira2019semiotics,
+  title        = {SEMIoTICS: Semantic Model-driven Development for IoT Interoperability of Emergency Services: Improving the Semantic Interoperability of IoT Early Warning Systems},
+  author       = {Moreira, {Jo{\~a}o Luiz}},
+  year         = 2019,
+  abstract     = {Disaster Risk Reduction (DRR) is a systematic approach to analyze potential disasters and reduce their occurrence rate and possible impact. The main DRR component is an Early Warning System (EWS), which is a distributed information system that is able to monitor the physical world and issue warnings if abnormal situations occur. In this case study, accident risks are assessed by monitoring two types of data, namely (1) the drivers{\textquoteright} vital signs with electrocardiogram (ECG), and (2) the trucks{\textquoteright} position, speed and acceleration. The most important contributions of this thesis are:\textbullet{} Improved IoT Semantic Interoperability;\textbullet{} Improved Situation Identification;\textbullet{} Interoperability reference for disaster services.},
+  language     = {English}
+}
+""",
+    )
+    validator = module.ReferencesBibValidator(module.Config())
+
+    result = validator.validate_target(dataset)
+
+    assert result.valid
+    assert result.entries_checked == 1
+    assert result.errors == []
+
+
+def test_extra_closing_brace_in_field_value_is_still_rejected(tmp_path: Path):
+    module = load_module()
+    dataset = make_dataset(
+        tmp_path,
+        bib_text=r"""@inproceedings{andrade2023integracao,
+  title = {Integra\c{c}\~{a}o de Dados de Publica\c{c}\~{o}es Cient\'{\i}ficas usando uma Abordagem baseada em Ontologias}},
+  author = {Example, Alice},
+  year = 2023
+}
+""",
+    )
+    validator = module.ReferencesBibValidator(module.Config())
+
+    result = validator.validate_target(dataset)
+
+    assert not result.valid
+    assert any(
+        issue.code in {"unexpected_text", "invalid_field_value"}
+        for issue in result.errors
+    )
+
+
+def test_trailing_dot_in_field_name_is_still_rejected(tmp_path: Path):
+    module = load_module()
+    dataset = make_dataset(
+        tmp_path,
+        bib_text="""@article{silva2012architecture,
+  title = {IT architecture from the service continuity perspective},
+  author. = {Example, Alice},
+  journal. = {Journal of Information Security Research},
+  year. = 2012
+}
+""",
+    )
+    validator = module.ReferencesBibValidator(module.Config())
+
+    result = validator.validate_target(dataset)
+
+    assert not result.valid
+    assert sum(issue.code == "invalid_field_name" for issue in result.errors) == 3
+
+
+def test_at_sign_inside_full_line_comment_is_ignored(tmp_path: Path):
+    module = load_module()
+    dataset = make_dataset(
+        tmp_path,
+        bib_text="""% See also @not_an_entry in this comment.
+@article{commentcase,
+  title = {A valid title},
+  author = {Example, Alice},
+  year = 2024
+}
+% Another comment mentioning @misc{ignored}.
+""",
+    )
+    validator = module.ReferencesBibValidator(module.Config())
+
+    result = validator.validate_target(dataset)
+
+    assert result.valid
+    assert result.entries_checked == 1
+    assert result.errors == []
+
+
+def test_literal_unpaired_double_quote_inside_braced_value_before_comment_is_valid(
+    tmp_path: Path,
+):
+    module = load_module()
+    dataset = make_dataset(
+        tmp_path,
+        bib_text="""@article{quotedbrace,
+  title = {A title with a literal " character}, % top-level field comment
+  author = {Example, Alice},
+  year = 2024
+}
+""",
+    )
+    validator = module.ReferencesBibValidator(module.Config())
+
+    result = validator.validate_target(dataset)
+
+    assert result.valid
+    assert result.entries_checked == 1
+    assert result.errors == []

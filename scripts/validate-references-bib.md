@@ -92,6 +92,7 @@ The validator checks that a present `references.bib` file:
 - uses field assignments in the form `field = value`;
 - has non-empty field values;
 - accepts top-level `%` comments between fields;
+- ignores `@` markers inside full-line `%` comments outside entries;
 - does not reuse the same citation key twice.
 
 The validator also recognizes `@string`, `@preamble`, and `@comment` as special entries. `@string` assignments are checked for a valid macro name and a basic value shape.
@@ -132,6 +133,16 @@ Valid entry with comments between fields:
 @article{commented,
   title = {Commented entry}, % comment after a field
   % full-line comment between fields
+  year = {2024}
+}
+```
+
+Valid full-line comment outside entries:
+
+```bibtex
+% See also @not-an-entry in a comment.
+@article{commented-outside,
+  title = {Commented outside},
   year = {2024}
 }
 ```

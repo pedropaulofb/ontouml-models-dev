@@ -138,7 +138,9 @@ KNOWN_ENTRY_TYPES: set[str] = {
     "inproceedings",
     "inreference",
     "manual",
+    "bachelorsthesis",
     "mastersthesis",
+    "masterthesis",
     "misc",
     "movie",
     "music",
@@ -229,7 +231,7 @@ def remove_top_level_line_comments(text: str) -> tuple[str, list[int]]:
                 index += 1
             continue
 
-        if char == '"':
+        if char == '"' and depth_brace == 0 and depth_paren == 0:
             in_quote = not in_quote
         elif not in_quote:
             if char == "{":
@@ -270,8 +272,35 @@ def is_outside_segment_ignorable(segment: str) -> bool:
     return True
 
 
+def is_at_in_full_line_comment(text: str, at_index: int) -> bool:
+    """Return whether an @ marker occurs inside an outside full-line comment."""
+
+    line_start = text.rfind("\n", 0, at_index) + 1
+    prefix = text[line_start:at_index].lstrip()
+    return prefix.startswith("%")
+
+
+def find_next_entry_marker(text: str, start: int) -> int:
+    """Return the next @ marker that is not inside a full-line comment."""
+
+    index = start
+    while True:
+        at_index = text.find("@", index)
+        if at_index == -1:
+            return -1
+        if not is_at_in_full_line_comment(text, at_index):
+            return at_index
+        index = at_index + 1
+
+
 def split_top_level(text: str, separator: str = ",") -> list[tuple[str, int]]:
-    """Split text on top-level separators, preserving segment start offsets."""
+    """Split text on top-level separators, preserving segment start offsets.
+
+    In BibTeX, quoted strings and braced values are both valid value forms. A
+    double quote inside a braced value is literal text, not the start of a quoted
+    string. Therefore, quote tracking is only activated at top level. This avoids
+    false positives for long abstracts containing ordinary quotation marks.
+    """
 
     parts: list[tuple[str, int]] = []
     depth_brace = 0
@@ -287,18 +316,18 @@ def split_top_level(text: str, separator: str = ",") -> list[tuple[str, int]]:
         if char == "\\":
             escaped = True
             continue
-        if char == '"':
+        if char == '"' and depth_brace == 0 and depth_paren == 0:
             in_quote = not in_quote
             continue
         if in_quote:
             continue
         if char == "{":
             depth_brace += 1
-        elif char == "}":
+        elif char == "}" and depth_brace > 0:
             depth_brace -= 1
         elif char == "(":
             depth_paren += 1
-        elif char == ")":
+        elif char == ")" and depth_paren > 0:
             depth_paren -= 1
         elif (
             char == separator and depth_brace == 0 and depth_paren == 0 and not in_quote
@@ -313,7 +342,12 @@ def split_top_level(text: str, separator: str = ",") -> list[tuple[str, int]]:
 def find_matching_delimiter(
     text: str, opener_index: int, opener: str, closer: str
 ) -> int:
-    """Return the index of the closing delimiter for a BibTeX entry body."""
+    """Return the index of the closing delimiter for a BibTeX entry body.
+
+    Quote tracking is only activated at the first nesting level of the entry.
+    Literal quotation marks inside braced field values must not hide the closing
+    brace of that field or of the entry.
+    """
 
     depth = 1
     in_quote = False
@@ -327,7 +361,7 @@ def find_matching_delimiter(
         if char == "\\":
             escaped = True
             continue
-        if char == '"':
+        if char == '"' and depth == 1:
             in_quote = not in_quote
             continue
         if in_quote:
@@ -340,6 +374,37 @@ def find_matching_delimiter(
                 return index
 
     raise ValueError("Unclosed BibTeX entry.")
+
+
+def braced_value_has_valid_shape(token: str) -> bool:
+    """Return whether a braced BibTeX value is balanced and fully enclosed.
+
+    Quotation marks inside a braced value are literal text. Backslash-escaped
+    characters are skipped so LaTeX fragments such as ``\\{`` do not change the
+    brace depth.
+    """
+
+    if not (token.startswith("{") and token.endswith("}") and len(token) >= 2):
+        return False
+
+    depth = 0
+    escaped = False
+    for index, char in enumerate(token):
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\":
+            escaped = True
+            continue
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0 and index != len(token) - 1:
+                return False
+            if depth < 0:
+                return False
+    return depth == 0 and not escaped
 
 
 class ReferencesBibValidator:
@@ -490,7 +555,7 @@ class ReferencesBibValidator:
         index = 0
 
         while True:
-            at_index = text.find("@", index)
+            at_index = find_next_entry_marker(text, index)
             if at_index == -1:
                 trailing = text[index:]
                 if not is_outside_segment_ignorable(trailing):
@@ -803,12 +868,7 @@ class ReferencesBibValidator:
             if not token:
                 return False
             if token.startswith("{"):
-                if not token.endswith("}"):
-                    return False
-                try:
-                    if find_matching_delimiter(token, 0, "{", "}") != len(token) - 1:
-                        return False
-                except ValueError:
+                if not braced_value_has_valid_shape(token):
                     return False
                 continue
             if token.startswith('"'):
