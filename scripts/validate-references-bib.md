@@ -93,6 +93,7 @@ The validator checks that a present `references.bib` file:
 - has non-empty field values;
 - accepts top-level `%` comments between fields;
 - ignores `@` markers inside full-line `%` comments outside entries;
+- accepts backslash-escaped literal braces such as `\{` and `\}` inside braced LaTeX values;
 - does not reuse the same citation key twice.
 
 The validator also recognizes `@string`, `@preamble`, and `@comment` as special entries. `@string` assignments are checked for a valid macro name and a basic value shape.

@@ -199,6 +199,10 @@ def remove_top_level_line_comments(text: str) -> tuple[str, list[int]]:
     The validator accepts comments between fields, e.g. after a comma. It does
     not strip percent signs inside braced or quoted values, where they may be
     intentional content such as ``title = {100\\% coverage}``.
+
+    Backslash-escaped braces are treated as brace-like LaTeX content for
+    balancing purposes. This accepts common constructs such as ``{\\{a}}`` in
+    exported BibTeX while still preserving original offsets.
     """
 
     output: list[str] = []
@@ -222,6 +226,16 @@ def remove_top_level_line_comments(text: str) -> tuple[str, list[int]]:
         if char == "\\":
             output.append(char)
             original_offsets.append(index)
+            next_char = text[index + 1] if index + 1 < len(text) else ""
+            if not in_quote and next_char in "{}":
+                output.append(next_char)
+                original_offsets.append(index + 1)
+                if next_char == "{":
+                    depth_brace += 1
+                elif next_char == "}" and depth_brace > 0:
+                    depth_brace -= 1
+                index += 2
+                continue
             escaped = True
             index += 1
             continue
@@ -300,6 +314,9 @@ def split_top_level(text: str, separator: str = ",") -> list[tuple[str, int]]:
     double quote inside a braced value is literal text, not the start of a quoted
     string. Therefore, quote tracking is only activated at top level. This avoids
     false positives for long abstracts containing ordinary quotation marks.
+
+    Backslash-escaped braces are treated as brace-like LaTeX content so values
+    such as ``{\\{a}}`` remain balanced during top-level splitting.
     """
 
     parts: list[tuple[str, int]] = []
@@ -308,18 +325,32 @@ def split_top_level(text: str, separator: str = ",") -> list[tuple[str, int]]:
     in_quote = False
     escaped = False
     start = 0
+    index = 0
 
-    for index, char in enumerate(text):
+    while index < len(text):
+        char = text[index]
         if escaped:
             escaped = False
+            index += 1
             continue
         if char == "\\":
+            next_char = text[index + 1] if index + 1 < len(text) else ""
+            if not in_quote and next_char in "{}":
+                if next_char == "{":
+                    depth_brace += 1
+                elif next_char == "}" and depth_brace > 0:
+                    depth_brace -= 1
+                index += 2
+                continue
             escaped = True
+            index += 1
             continue
         if char == '"' and depth_brace == 0 and depth_paren == 0:
             in_quote = not in_quote
+            index += 1
             continue
         if in_quote:
+            index += 1
             continue
         if char == "{":
             depth_brace += 1
@@ -334,6 +365,7 @@ def split_top_level(text: str, separator: str = ",") -> list[tuple[str, int]]:
         ):
             parts.append((text[start:index], start))
             start = index + 1
+        index += 1
 
     parts.append((text[start:], start))
     return parts
@@ -347,24 +379,43 @@ def find_matching_delimiter(
     Quote tracking is only activated at the first nesting level of the entry.
     Literal quotation marks inside braced field values must not hide the closing
     brace of that field or of the entry.
+
+    Backslash-escaped braces are treated as brace-like LaTeX content for
+    balancing purposes. This avoids prematurely closing entries that contain
+    exported fragments such as ``{\\{o}}`` in a braced title.
     """
 
     depth = 1
     in_quote = False
     escaped = False
+    index = opener_index + 1
 
-    for index in range(opener_index + 1, len(text)):
+    while index < len(text):
         char = text[index]
         if escaped:
             escaped = False
+            index += 1
             continue
         if char == "\\":
+            next_char = text[index + 1] if index + 1 < len(text) else ""
+            if not in_quote and next_char in "{}":
+                if next_char == opener:
+                    depth += 1
+                elif next_char == closer:
+                    depth -= 1
+                    if depth == 0:
+                        return index + 1
+                index += 2
+                continue
             escaped = True
+            index += 1
             continue
         if char == '"' and depth == 1:
             in_quote = not in_quote
+            index += 1
             continue
         if in_quote:
+            index += 1
             continue
         if char == opener:
             depth += 1
@@ -372,6 +423,7 @@ def find_matching_delimiter(
             depth -= 1
             if depth == 0:
                 return index
+        index += 1
 
     raise ValueError("Unclosed BibTeX entry.")
 
@@ -380,8 +432,8 @@ def braced_value_has_valid_shape(token: str) -> bool:
     """Return whether a braced BibTeX value is balanced and fully enclosed.
 
     Quotation marks inside a braced value are literal text. Backslash-escaped
-    characters are skipped so LaTeX fragments such as ``\\{`` do not change the
-    brace depth.
+    braces are treated as brace-like LaTeX content for balancing purposes, so
+    exported constructs such as ``{\\{a}}`` do not prematurely close the value.
     """
 
     if not (token.startswith("{") and token.endswith("}") and len(token) >= 2):
@@ -389,12 +441,28 @@ def braced_value_has_valid_shape(token: str) -> bool:
 
     depth = 0
     escaped = False
-    for index, char in enumerate(token):
+    index = 0
+    while index < len(token):
+        char = token[index]
         if escaped:
             escaped = False
+            index += 1
             continue
         if char == "\\":
+            next_char = token[index + 1] if index + 1 < len(token) else ""
+            if next_char in "{}":
+                if next_char == "{":
+                    depth += 1
+                elif next_char == "}":
+                    depth -= 1
+                    if depth == 0 and index + 1 != len(token) - 1:
+                        return False
+                    if depth < 0:
+                        return False
+                index += 2
+                continue
             escaped = True
+            index += 1
             continue
         if char == "{":
             depth += 1
@@ -404,6 +472,7 @@ def braced_value_has_valid_shape(token: str) -> bool:
                 return False
             if depth < 0:
                 return False
+        index += 1
     return depth == 0 and not escaped
 
 
