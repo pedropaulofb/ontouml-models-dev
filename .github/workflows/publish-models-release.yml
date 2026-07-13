@@ -1,0 +1,261 @@
+name: Publish models release
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - "models/**"
+      - "scripts/generate_release_file.py"
+      - "scripts/tests/test_generate_release_file.py"
+      - ".github/workflows/publish-models-release.yml"
+
+  push:
+    branches:
+      - master
+    paths:
+      - "models/**"
+
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag in YYYYMMDD format. Leave empty to use the current UTC date."
+        required: false
+        type: string
+      dry_run:
+        description: "Generate and validate the release file without publishing a GitHub Release."
+        required: true
+        default: true
+        type: boolean
+      publish_release:
+        description: "Publish a GitHub Release during manual dispatch. Ignored when dry_run is true."
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-models-release-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate-release-generation:
+    name: Validate release generation
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check out pull request
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install script dependencies
+        run: python -m pip install -r scripts/requirements.txt
+
+      - name: Run release-generator tests
+        run: python -m pytest -q scripts/tests/test_generate_release_file.py
+
+      - name: Generate release file for validation
+        run: |
+          set -euo pipefail
+          python scripts/generate_release_file.py . \
+            --release-tag 19700101 \
+            --output-dir results \
+            --list-files
+
+      - name: Validate generated release Turtle
+        run: |
+          set -euo pipefail
+          test -s results/ontouml-models-19700101.ttl
+          python - <<'PY'
+          from rdflib import Graph
+
+          graph = Graph()
+          graph.parse("results/ontouml-models-19700101.ttl", format="turtle")
+          print(f"Parsed release graph with {len(graph)} triples.")
+          PY
+
+      - name: Upload validation artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ontouml-models-release-pr-${{ github.event.pull_request.number }}
+          path: results/ontouml-models-19700101.ttl
+          if-no-files-found: error
+          retention-days: 30
+
+  generate-and-publish-release:
+    name: Generate and publish release
+    if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install script dependencies
+        run: python -m pip install -r scripts/requirements.txt
+
+      - name: Run release-generator tests
+        run: python -m pytest -q scripts/tests/test_generate_release_file.py
+
+      - name: Resolve release settings
+        id: settings
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || '' }}
+          INPUT_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || 'false' }}
+          INPUT_PUBLISH_RELEASE: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_release || 'false' }}
+        run: |
+          set -euo pipefail
+
+          release_tag="${INPUT_RELEASE_TAG:-}"
+          if [ -z "$release_tag" ]; then
+            release_tag="$(date -u +%Y%m%d)"
+          fi
+
+          if ! printf '%s' "$release_tag" | grep -Eq '^[0-9]{8}$'; then
+            echo "Release tag must use YYYYMMDD format; got: $release_tag" >&2
+            exit 1
+          fi
+
+          dry_run="false"
+          publish_release="true"
+
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            dry_run="${INPUT_DRY_RUN:-true}"
+            publish_release="${INPUT_PUBLISH_RELEASE:-false}"
+          fi
+
+          if [ "$dry_run" = "true" ]; then
+            publish_release="false"
+          fi
+
+          if [ "$publish_release" = "true" ] && [ "$GITHUB_REF" != "refs/heads/master" ]; then
+            echo "Publishing releases is only allowed from refs/heads/master; current ref is $GITHUB_REF." >&2
+            exit 1
+          fi
+
+          release_file="results/ontouml-models-${release_tag}.ttl"
+
+          echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
+          echo "release_file=$release_file" >> "$GITHUB_OUTPUT"
+          echo "dry_run=$dry_run" >> "$GITHUB_OUTPUT"
+          echo "publish_release=$publish_release" >> "$GITHUB_OUTPUT"
+
+          echo "Release tag: $release_tag"
+          echo "Release file: $release_file"
+          echo "Dry run: $dry_run"
+          echo "Publish release: $publish_release"
+
+      - name: Check existing release state
+        id: existing_release
+        if: ${{ steps.settings.outputs.publish_release == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.settings.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+
+          git fetch --tags --force
+
+          tag_exists="false"
+          tag_points_to_current_sha="false"
+          release_exists="false"
+          release_already_published="false"
+
+          existing_tag_sha="$(git rev-list -n 1 "refs/tags/${RELEASE_TAG}" 2>/dev/null || true)"
+
+          if [ -n "$existing_tag_sha" ]; then
+            tag_exists="true"
+            if [ "$existing_tag_sha" = "$GITHUB_SHA" ]; then
+              tag_points_to_current_sha="true"
+            else
+              echo "Tag ${RELEASE_TAG} already exists and points to ${existing_tag_sha}, not current commit ${GITHUB_SHA}." >&2
+              echo "Refusing to create a duplicate date-tagged release." >&2
+              exit 1
+            fi
+          fi
+
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            release_exists="true"
+          fi
+
+          if [ "$release_exists" = "true" ] && [ "$tag_exists" != "true" ]; then
+            echo "GitHub Release ${RELEASE_TAG} exists, but the corresponding tag was not found locally after fetching tags." >&2
+            exit 1
+          fi
+
+          if [ "$release_exists" = "true" ] && [ "$tag_points_to_current_sha" != "true" ]; then
+            echo "GitHub Release ${RELEASE_TAG} exists, but it is not associated with the current commit ${GITHUB_SHA}." >&2
+            exit 1
+          fi
+
+          if [ "$release_exists" = "true" ] && [ "$tag_points_to_current_sha" = "true" ]; then
+            release_already_published="true"
+            echo "Release ${RELEASE_TAG} already exists for the current commit. This rerun will not create a duplicate release."
+          fi
+
+          echo "release_already_published=$release_already_published" >> "$GITHUB_OUTPUT"
+
+      - name: Generate release file
+        run: |
+          set -euo pipefail
+          python scripts/generate_release_file.py . \
+            --release-tag "${{ steps.settings.outputs.release_tag }}" \
+            --output-dir results \
+            --list-files
+
+      - name: Validate generated release Turtle
+        run: |
+          set -euo pipefail
+          test -s "${{ steps.settings.outputs.release_file }}"
+          python - <<'PY'
+          from rdflib import Graph
+
+          path = "${{ steps.settings.outputs.release_file }}"
+          graph = Graph()
+          graph.parse(path, format="turtle")
+          print(f"Parsed release graph with {len(graph)} triples.")
+          PY
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ontouml-models-release-${{ steps.settings.outputs.release_tag }}
+          path: ${{ steps.settings.outputs.release_file }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Create GitHub Release
+        if: ${{ steps.settings.outputs.publish_release == 'true' && steps.existing_release.outputs.release_already_published != 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.settings.outputs.release_tag }}
+          RELEASE_FILE: ${{ steps.settings.outputs.release_file }}
+        run: |
+          set -euo pipefail
+
+          gh release create "$RELEASE_TAG" "$RELEASE_FILE" \
+            --target "$GITHUB_SHA" \
+            --title "$RELEASE_TAG" \
+            --generate-notes
