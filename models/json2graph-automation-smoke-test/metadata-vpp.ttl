@@ -1,0 +1,18 @@
+@prefix dcat: <http://www.w3.org/ns/dcat#> .
+@prefix dct: <http://purl.org/dc/terms/> .
+@prefix fdpo: <https://w3id.org/fdp/fdp-o#> .
+@prefix ocmv: <https://w3id.org/ontouml-models/vocabulary#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+<https://w3id.org/ontouml-models/distribution/e5171a21-ee3b-522f-b231-aae61c1b86ee/> a dcat:Distribution ;
+    dct:format <https://www.file-extension.info/format/vpp> ;
+    dct:isPartOf <https://w3id.org/ontouml-models/model/2bb0ffe0-b1e2-5a34-add7-f1c956d15b82> ;
+    dct:issued "2020"^^xsd:gYear ;
+    dct:license <https://creativecommons.org/licenses/by/4.0/> ;
+    dct:title "Visual Paradigm distribution of Medical Appointment Ontology"@en ;
+    dcat:downloadURL <https://raw.githubusercontent.com/OntoUML/ontouml-models/feat%2Fjson2graph-submission-automation/models/json2graph-automation-smoke-test/ontology.vpp> ;
+    dcat:mediaType <https://www.iana.org/assignments/media-types/application/octet-stream> ;
+    fdpo:metadataIssued "2026-08-27T13:48:04.626171Z"^^xsd:dateTime ;
+    fdpo:metadataModified "2026-08-27T13:48:04.626171Z"^^xsd:dateTime ;
+    ocmv:isComplete true .
+

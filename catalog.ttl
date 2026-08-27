@@ -19,7 +19,7 @@
     dct:license <https://creativecommons.org/licenses/by-sa/4.0/>;
     dct:accessRights <http://publications.europa.eu/resource/authority/access-right/PUBLIC>;
     dct:issued "2019-06-18"^^xsd:date;
-    dct:modified "2026-07-13T20:52:26.627417Z"^^xsd:dateTime;
+    dct:modified "2026-08-27T13:48:05.34642Z"^^xsd:dateTime;
     dcat:contactPoint [
         rdf:type vcard:Individual;
         vcard:fn "Pedro Paulo Favato Barcelos";
@@ -361,7 +361,7 @@
                     <https://www.researchgate.net/profile/Emma-Tieffenbach>;
     dct:isPartOf <https://w3id.org/ontouml-models>;
     fdpo:metadataIssued "2023-04-14T16:51:55.738Z"^^xsd:dateTime;
-    fdpo:metadataModified "2026-07-13T20:52:26.627417Z"^^xsd:dateTime;
+    fdpo:metadataModified "2026-08-27T13:48:05.34642Z"^^xsd:dateTime;
     dcat:dataset <https://w3id.org/ontouml-models/model/01b11d4e-3eb1-4aae-ab31-5daa5220fffc/>,
                  <https://w3id.org/ontouml-models/model/03f684a6-3a6c-4cc0-8ca6-6375f74d5081/>,
                  <https://w3id.org/ontouml-models/model/059dca17-0539-4e2c-8f50-fccc4e243242/>,
@@ -396,6 +396,7 @@
                  <https://w3id.org/ontouml-models/model/291e45be-4c9d-41b1-a237-f3f47714226d/>,
                  <https://w3id.org/ontouml-models/model/2a5b8924-d39a-40fc-8c68-cf1be0dd694e/>,
                  <https://w3id.org/ontouml-models/model/2b3d29db-eaea-4966-83e5-af9ca54f3086/>,
+                 <https://w3id.org/ontouml-models/model/2bb0ffe0-b1e2-5a34-add7-f1c956d15b82/>,
                  <https://w3id.org/ontouml-models/model/34ed86ed-d667-41d2-9eef-cbe8f238e1f9/>,
                  <https://w3id.org/ontouml-models/model/3585c8fe-d974-4ef3-801f-597cc683a1d2/>,
                  <https://w3id.org/ontouml-models/model/3788bfab-abc8-4765-80ec-7744f927c0e7/>,

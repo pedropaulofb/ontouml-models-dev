@@ -1,0 +1,35 @@
+@prefix fdpo: <https://w3id.org/fdp/fdp-o#> .
+@prefix dcat: <http://www.w3.org/ns/dcat#> .
+@prefix dct: <http://purl.org/dc/terms/> .
+@prefix lcc: <http://id.loc.gov/authorities/classification/> .
+@prefix mod: <https://w3id.org/mod#> .
+@prefix ocmv: <https://w3id.org/ontouml-models/vocabulary#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+<https://w3id.org/ontouml-models/model/2bb0ffe0-b1e2-5a34-add7-f1c956d15b82/> a dcat:Dataset, mod:SemanticArtefact, dcat:Resource;
+    dct:isPartOf <https://w3id.org/ontouml-models/catalog/b663ca18-8085-44a7-bcfe-2c2b5ba1faa8>;
+    dct:title "Medical Appointment Ontology";
+    dct:issued "2020"^^xsd:gYear;
+    dcat:theme lcc:R;
+    dct:language "pt-br";
+    dct:license <https://creativecommons.org/licenses/by/4.0/>;
+    dct:contributor <https://dblp.org/pid/06/11109>,
+                    <https://dblp.org/pid/05/2483>,
+                    <https://dblp.org/pid/82/191>;
+    dcat:keyword "medical appointment"@en;
+    dct:source <https://dblp.org/rec/conf/cibse/ValaskiRM20>;
+    mod:designedForTask ocmv:ConceptualClarification;
+    ocmv:context ocmv:Research;
+    ocmv:representationStyle ocmv:OntoumlStyle;
+    ocmv:ontologyType ocmv:Domain;
+    ocmv:storageUrl "https://github.com/OntoUML/ontouml-models/tree/feat/json2graph-submission-automation/models/json2graph-automation-smoke-test"^^xsd:anyURI;
+    fdpo:metadataIssued "2026-08-27T13:48:04.768371Z"^^xsd:dateTime;
+    fdpo:metadataModified "2026-08-27T13:48:04.768371Z"^^xsd:dateTime .
+
+<https://w3id.org/ontouml-models/model/2bb0ffe0-b1e2-5a34-add7-f1c956d15b82> dcat:distribution <https://w3id.org/ontouml-models/distribution/10b5eacc-2598-5f08-9e97-9058c2319824/>,
+                      <https://w3id.org/ontouml-models/distribution/a3e71e58-5d86-53ad-bc46-2c990ed0178b/>,
+                      <https://w3id.org/ontouml-models/distribution/126f093e-b487-5eca-9dc2-e1583c4e271c/>,
+                      <https://w3id.org/ontouml-models/distribution/e5171a21-ee3b-522f-b231-aae61c1b86ee/> .
