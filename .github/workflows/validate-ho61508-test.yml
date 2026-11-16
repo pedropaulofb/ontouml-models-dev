@@ -1,0 +1,24 @@
+name: Validate HO61508 metadata (temporary)
+on:
+  pull_request:
+    branches: [master]
+    paths:
+      - models/jochumsson2026ho61508/metadata.yaml
+      - .github/workflows/validate-ho61508-test.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  validate-metadata:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install repository validator dependencies
+        run: python -m pip install -r scripts/requirements.txt
+      - name: Authoritative standalone validation
+        run: python scripts/validate_metadata_yaml.py models/jochumsson2026ho61508 --format json
+      - name: Downstream metadata conversion dry run
+        run: python scripts/metadata_yaml_to_ttl.py models/jochumsson2026ho61508 --dry-run --metadata-timestamp 2026-11-16T12:00:00Z
