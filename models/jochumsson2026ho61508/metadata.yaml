@@ -1,6 +1,9 @@
 title: Hazard Ontology 61508
 acronym: HO61508
 issued: 2026
+modified: 2026
+contributor:
+  - https://www.es.mdu.se/staff/4650-Thorvaldur_Jochumsson
 keyword:
   - functional safety
   - hazard
