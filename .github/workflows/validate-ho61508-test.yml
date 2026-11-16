@@ -21,4 +21,4 @@ jobs:
       - name: Authoritative standalone validation
         run: python scripts/validate_metadata_yaml.py models/jochumsson2026ho61508 --format json
       - name: Downstream metadata conversion dry run
-        run: python scripts/metadata_yaml_to_ttl.py models/jochumsson2026ho61508 --dry-run
+        run: python scripts/metadata_yaml_to_ttl.py models/jochumsson2026ho61508 --dry-run --metadata-timestamp 2026-11-16T12:00:00Z
